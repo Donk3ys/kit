@@ -27,7 +27,9 @@ Its first consumer is the freelance-tax-copilot rebuild.
 | `httpin/` | Strict JSON decoding, validation, path params. |
 | `db/` | pgx pool construction and transaction helpers. |
 | `obs/` | slog + OpenTelemetry bootstrap. No middleware, no logger wrapper. |
-| `README.md` | The composition root wiring all six together, and a worked problem response. Read it first. |
+| `examples/api/` | A complete runnable service wiring all six packages. Compiled by `go build ./...`. |
+| `*/example_test.go` | Go `Example` functions — compiled *and run* by `go test`, with `// Output:` assertions. |
+| `README.md` | The composition root, the handler pattern, and a worked problem response. Read it first. |
 
 There are no product docs beyond this file and `README.md`; the package doc comments are the
 specification. Judge a change against those and against the reasoning recorded in comments — several
@@ -41,6 +43,12 @@ go build ./... && go vet ./... && gofmt -l . && go test ./... -cover
 
 `gofmt -l .` must print nothing. A change is not done until all four pass.
 
+**Usage examples are executable, and that is the point.** `examples/api` is compiled by
+`go build ./...`, and every `Example*` function is run by `go test` with its `// Output:` block
+asserted. A change to a signature or a response body breaks them, which is exactly what a README
+snippet cannot do. When behaviour changes, update the examples in the same change rather than
+letting them drift — and prefer adding an `Example` over adding a prose snippet to `README.md`.
+
 Coverage is high on purpose — this is the code every service depends on, so a bug here is a bug
 everywhere. Do not let it fall without saying why. `db.NewPool` is the one known gap: it needs a
 real PostgreSQL and belongs in an integration test. `db.PoolConfig` exists specifically so the
@@ -48,9 +56,9 @@ configuration translation is testable without one — keep that split.
 
 ## Base branch
 
-`main`. **This repository is not yet under version control** — `git init`, an initial commit, and a
-`v0.1.0` tag are outstanding, and should happen before the FTC rebuild imports it so the first
-consumer pins a version rather than tracking a moving branch.
+`main`. There is no remote yet, and no released tag — cutting `v0.1.0` before the FTC rebuild
+imports this module is outstanding, so the first consumer pins a version rather than tracking a
+moving branch.
 
 ## Core architectural principles
 

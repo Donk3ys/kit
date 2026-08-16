@@ -27,6 +27,32 @@ upstream:
 | HTTP tracing and metrics | `otelhttp.NewHandler` (OTel semantic conventions) |
 | Contextual logging | `*slog.Logger` — it has had `InfoContext` since Go 1.21 |
 
+## Examples
+
+Everything below is also available as compiled, executed code — so it cannot drift from the library
+the way a README snippet can:
+
+| Where | What |
+| --- | --- |
+| `examples/api/` | A complete runnable service: composition root, middleware chain, handlers, a service layer returning `apperr`, and a transaction. Compiled by `go build ./...`. |
+| `apperr/example_test.go` | Constructing and classifying errors; copy-on-write builders. |
+| `respond/example_test.go` | The handler pattern, and the exact problem body a client receives. |
+| `httpin/example_test.go` | Decoding, per-field validation failures, content-type enforcement. |
+| `db/example_test.go` | Pool construction, `InTx`, nested transactions, rollback semantics. |
+
+```bash
+go test ./... -run Example -v   # run them
+go doc ./respond                # read them alongside the API
+```
+
+To run the example service:
+
+```bash
+createdb kitdemo
+psql kitdemo -c 'CREATE TABLE widgets (id UUID PRIMARY KEY, name TEXT NOT NULL, quantity INT NOT NULL)'
+DATABASE_URL=postgres://localhost:5432/kitdemo go run ./examples/api
+```
+
 ## Composition root
 
 ```go

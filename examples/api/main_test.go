@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"regexp"
 	"strings"
 
@@ -81,9 +82,18 @@ func newTestRouterWithMetrics(registry *prometheus.Registry) (http.Handler, *wid
 	}
 	svc.nextID = func() uuid.UUID { return uuid.MustParse(fixedID) }
 
-	// Logs go nowhere so example output is just the wire traffic. In
-	// production this is where the one-line-per-failure log would appear.
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	// Example output is asserted from stdout, so opt-in logs use stderr: this
+	// keeps the wire walkthrough deterministic while making the production log
+	// path observable with KIT_EXAMPLE_LOGS=1 make walkthrough.
+	logOutput := io.Writer(io.Discard)
+	if os.Getenv("KIT_EXAMPLE_LOGS") != "" {
+		logOutput = os.Stderr
+	}
+	logger := obs.NewLogger(obs.LogConfig{
+		Level:  slog.LevelInfo,
+		Format: "text",
+		Output: logOutput,
+	})
 	return newRouter(logger, registry, svc), svc
 }
 

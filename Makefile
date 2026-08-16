@@ -31,7 +31,7 @@ examples:
 
 # Run the end-to-end walkthrough and print what a client actually sees.
 walkthrough:
-	go -C examples test ./api -run Example -v
+	KIT_EXAMPLE_LOGS=1 go -C examples test ./api -run Example -v
 
 tidy:
 	go mod tidy

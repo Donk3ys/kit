@@ -76,6 +76,10 @@ func (b *Boundary) Error(w http.ResponseWriter, r *http.Request, err error) {
 
 	body, skipped := b.problemWithExtensions(appErr, status, requestID)
 	b.log(r, appErr, status, requestID, skipped)
+	// Same classification, three destinations: the response body, one log
+	// line, and the active span. Doing all three here is what stops them
+	// disagreeing about what happened.
+	recordSpan(r.Context(), appErr, status)
 
 	// A handler that wrote a response and then failed leaves us with headers
 	// already on the wire. A second status line cannot be sent and a second

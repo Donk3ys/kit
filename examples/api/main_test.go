@@ -12,6 +12,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/otel"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace/noop"
 
 	"github.com/Donk3ys/kit/obs"
 )
@@ -239,4 +243,50 @@ func silent(h http.Handler, method, path, body string) {
 	r := httptest.NewRequest(method, path, strings.NewReader(body))
 	r.Header.Set("Content-Type", "application/json")
 	h.ServeHTTP(httptest.NewRecorder(), r)
+}
+
+// Example_traces answers "what does the tracer do on success versus error?".
+//
+// It installs a recording provider, issues three requests, and prints the
+// resulting spans with their status. The rule to notice: a 4xx leaves its span
+// Unset because the API worked as designed, while a 5xx is marked Error and
+// carries an exception event. Reddening expected outcomes is how an error-rate
+// panel becomes useless.
+func Example_traces() {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	otel.SetTracerProvider(provider)
+	defer func() {
+		_ = provider.Shutdown(context.Background())
+		otel.SetTracerProvider(noop.NewTracerProvider())
+	}()
+
+	h, _ := newTestRouterWithMetrics(nil)
+
+	silent(h, http.MethodPost, "/api/v1/widgets", `{"name":"bolt","quantity":12}`) // 201
+	silent(h, http.MethodPost, "/api/v1/widgets", `{"name":"bolt","quantity":3}`)  // 409
+	silent(h, http.MethodGet, "/api/v1/boom", "")                                  // 500, panic
+
+	for _, s := range exporter.GetSpans() {
+		exception := ""
+		for _, e := range s.Events {
+			if e.Name == "exception" {
+				exception = " +exception"
+			}
+		}
+		code := ""
+		for _, a := range s.Attributes {
+			if a.Key == "app.error.code" {
+				code = " " + a.Value.AsString()
+			}
+		}
+		fmt.Printf("%-28s %-5s%s%s\n", s.Name, s.Status.Code, code, exception)
+	}
+
+	// Output:
+	// widgetService.create         Unset
+	// POST /api/v1/widgets         Unset
+	// widgetService.create         Unset
+	// POST /api/v1/widgets         Unset WIDGET_NAME_TAKEN
+	// GET /api/v1/boom             Error PANIC +exception
 }

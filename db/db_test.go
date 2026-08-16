@@ -346,3 +346,38 @@ func TestRollbackErrorMessageNamesBothFailures(t *testing.T) {
 		}
 	}
 }
+
+// stubQueryTracer is a pgx.QueryTracer that records nothing; the point is that
+// PoolConfig hands it to the driver.
+type stubQueryTracer struct{}
+
+func (stubQueryTracer) TraceQueryStart(
+	ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData,
+) context.Context {
+	return ctx
+}
+func (stubQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// Without this hook there is no way to reach ConnConfig.Tracer through
+// NewPool, so an app could not instrument its queries at all.
+func TestPoolConfigInstallsAQueryTracer(t *testing.T) {
+	tracer := stubQueryTracer{}
+
+	cfg, err := db.PoolConfig(db.Config{DSN: testDSN, QueryTracer: tracer})
+	if err != nil {
+		t.Fatalf("PoolConfig returned %v", err)
+	}
+	if cfg.ConnConfig.Tracer != pgx.QueryTracer(tracer) {
+		t.Errorf("ConnConfig.Tracer = %v, want the configured tracer", cfg.ConnConfig.Tracer)
+	}
+}
+
+func TestPoolConfigLeavesTracerUnsetByDefault(t *testing.T) {
+	cfg, err := db.PoolConfig(db.Config{DSN: testDSN})
+	if err != nil {
+		t.Fatalf("PoolConfig returned %v", err)
+	}
+	if cfg.ConnConfig.Tracer != nil {
+		t.Errorf("ConnConfig.Tracer = %v, want nil", cfg.ConnConfig.Tracer)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Donk3ys/kit/apperr"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -51,6 +52,23 @@ type Config struct {
 	// open without doing anything. Recommended: a leaked transaction blocks
 	// vacuum and can hold locks indefinitely.
 	IdleInTransactionSessionTimeout time.Duration
+
+	// QueryTracer, when set, is invoked around every query the pool runs.
+	//
+	// This package does not implement one: pgx already defines the interface,
+	// and github.com/exaring/otelpgx implements it against OTel semantic
+	// conventions, so writing another here would be rebuilding what the
+	// ecosystem ships. The field exists because without it there is no way to
+	// reach ConnConfig.Tracer through this constructor at all.
+	//
+	//	pool, err := db.NewPool(ctx, db.Config{
+	//	        DSN:         cfg.DatabaseURL,
+	//	        QueryTracer: otelpgx.NewTracer(),
+	//	})
+	//
+	// Per-query spans are noisy at high volume; sample them, or instrument
+	// units of work by hand instead.
+	QueryTracer pgx.QueryTracer
 }
 
 // DefaultConnectTimeout applies when Config.ConnectTimeout is zero.
@@ -84,6 +102,9 @@ func PoolConfig(cfg Config) (*pgxpool.Config, error) {
 	}
 	if cfg.MaxConnIdleTime > 0 {
 		poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
+	}
+	if cfg.QueryTracer != nil {
+		poolCfg.ConnConfig.Tracer = cfg.QueryTracer
 	}
 
 	connectTimeout := cfg.ConnectTimeout

@@ -27,7 +27,7 @@ Its first consumer is the freelance-tax-copilot rebuild.
 | `httpin/` | Strict JSON decoding, validation, path params. |
 | `db/` | pgx pool construction and transaction helpers. |
 | `obs/` | slog + OpenTelemetry bootstrap. No middleware, no logger wrapper. |
-| `examples/api/` | A complete runnable service wiring all six packages. Compiled by `go build ./...`. |
+| `examples/api/` | A complete service wiring all six packages, plus `main_test.go`, which drives the whole stack end to end in memory and asserts the exact wire output. |
 | `*/example_test.go` | Go `Example` functions — compiled *and run* by `go test`, with `// Output:` assertions. |
 | `README.md` | The composition root, the handler pattern, and a worked problem response. Read it first. |
 
@@ -48,6 +48,11 @@ go build ./... && go vet ./... && gofmt -l . && go test ./... -cover
 asserted. A change to a signature or a response body breaks them, which is exactly what a README
 snippet cannot do. When behaviour changes, update the examples in the same change rather than
 letting them drift — and prefer adding an `Example` over adding a prose snippet to `README.md`.
+
+Per-package examples stay **beside the code they document**. Do not move them into `examples/`:
+`go vet` rejects an `Example` name that does not resolve to an identifier in the package under
+test (`ExampleNoSuchSymbol refers to unknown identifier`), and pkgsite attaches each one to the
+symbol it names. `examples/api` is where they are shown composed.
 
 Coverage is high on purpose — this is the code every service depends on, so a bug here is a bug
 everywhere. Do not let it fall without saying why. `db.NewPool` is the one known gap: it needs a

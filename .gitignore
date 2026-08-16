@@ -1,0 +1,13 @@
+# Test and coverage output
+*.out
+*.test
+coverage.html
+
+# Go workspace files — local to a machine, never shared
+go.work
+go.work.sum
+
+# Editor and OS
+.DS_Store
+.idea/
+*.swp

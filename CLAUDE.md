@@ -1,0 +1,129 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this
+repository. It is this repository's declaration under "The host repository contract"
+(`~/.agents/epic/references/foundation.md`).
+
+## What this is
+
+`github.com/Donk3ys/kit` — shared Go plumbing for Postgres + chi HTTP services. It was **extracted
+from two working codebases** (`freelance-tax-copilot`, and the archived `nodeb8`) rather than
+designed up front, and every line in it ran in production or dogfooding before it landed here.
+
+It is a **library, not a framework**. It never owns `main`, the router, or the dependency graph.
+The app composes; kit hands it pieces. If a change here starts owning startup — an `App` type, a
+`Run` function, a registry handlers plug into — that is the failure mode this repository exists to
+avoid, not a refactor.
+
+Its first consumer is the freelance-tax-copilot rebuild.
+
+## Repository map
+
+| Path | What it is |
+| --- | --- |
+| `apperr/` | Classified errors. Imports **nothing** beyond `errors`, `maps`, `log/slog` — no `net/http`, no router, no driver. |
+| `respond/` | The HTTP boundary: `Kind`→status, RFC 9457 problem details, log-once, `classify`. |
+| `httpmw/` | Only the middlewares that must know about the boundary: `Recoverer`, `AccessLog`, `SecurityHeaders`. |
+| `httpin/` | Strict JSON decoding, validation, path params. |
+| `db/` | pgx pool construction and transaction helpers. |
+| `obs/` | slog + OpenTelemetry bootstrap. No middleware, no logger wrapper. |
+| `README.md` | The composition root wiring all six together, and a worked problem response. Read it first. |
+
+There are no product docs beyond this file and `README.md`; the package doc comments are the
+specification. Judge a change against those and against the reasoning recorded in comments — several
+of them exist to stop a plausible-looking "simplification" from reintroducing a fixed bug.
+
+## Verification commands
+
+```bash
+go build ./... && go vet ./... && gofmt -l . && go test ./... -cover
+```
+
+`gofmt -l .` must print nothing. A change is not done until all four pass.
+
+Coverage is high on purpose — this is the code every service depends on, so a bug here is a bug
+everywhere. Do not let it fall without saying why. `db.NewPool` is the one known gap: it needs a
+real PostgreSQL and belongs in an integration test. `db.PoolConfig` exists specifically so the
+configuration translation is testable without one — keep that split.
+
+## Base branch
+
+`main`. **This repository is not yet under version control** — `git init`, an initial commit, and a
+`v0.1.0` tag are outstanding, and should happen before the FTC rebuild imports it so the first
+consumer pins a version rather than tracking a moving branch.
+
+## Core architectural principles
+
+- **Do not rebuild what the ecosystem ships.** This is the rule that shaped the current package
+  list. Take from upstream:
+
+  | Concern | Use |
+  | --- | --- |
+  | Request ID, timeout, body limit, compression, response recording | `chi/middleware` |
+  | CORS | `go-chi/cors` |
+  | HTTP tracing and metrics | `otelhttp.NewHandler` (OTel semantic conventions) |
+  | Contextual logging | `*slog.Logger` — it has had `InfoContext` since Go 1.21 |
+
+  Before adding anything to `httpmw` or `obs`, check whether chi or OTel already provides it. An
+  earlier draft of this module rebuilt six chi middlewares, `WrapResponseWriter`, and both
+  otelhttp's tracing and its metrics.
+
+- **Errors are values.** Constructing one has no side effects — no span recording, no logging — so
+  building an error you then wrap or discard cannot pollute a trace. Do not add a `ctx` parameter to
+  a constructor.
+
+- **Builders copy, never mutate.** `WithAttrs`/`WithExtensions`/`WithSeverity`/`WithCause` return
+  copies so decorating a package-level sentinel at one call site cannot alter it for every other
+  caller. Two tests pin this; they are not ceremony.
+
+- **Exactly one place logs a failed request.** `respond.Boundary.Wrap` is that place. Nothing below
+  the boundary logs an error it also returns. This is why the earlier `claimFinalErrorLog` atomic
+  coordination could be deleted — keep it structural.
+
+- **Transport lives in `respond`, not `apperr`.** `Kind` is semantic (`not_found`); `404` is one
+  transport's opinion. Do not move `StatusFor` onto the Kind type, and do not let `apperr` grow a
+  `net/http` import.
+
+- **Classification fails closed.** An unrecognised error becomes a logged internal 500 with a
+  generic detail. Never let a driver message reach a response body.
+
+- **Cleanup runs on a live context.** `db.PreserveRollbackError` uses `context.WithoutCancel` — the
+  request context is usually already cancelled by the time cleanup runs, often because that
+  cancellation caused the failure. Rolling back on it leaks the transaction.
+
+## Contract surface
+
+These are read by web and Flutter clients. A change to any of them is a breaking API change, not a
+refactor:
+
+- `apperr.Error.Code` strings, wherever they are constructed.
+- The problem-details member names: `type`, `title`, `status`, `detail`, `instance`, `code`.
+- `invalid-params` with `name`/`reason`, which is the shape from RFC 9457 §3's own example —
+  matched deliberately rather than invented. Two tests pin the serialised JSON byte-for-byte.
+- `httpin`'s dotted field paths (`employment[1].months`), which clients map back to form controls.
+
+## What must not enter kit
+
+**Extraction is safe; addition is what needs discipline.** With one live consumer there is nothing
+pushing back on a bad abstraction, so:
+
+- Nothing enters that is not already working in a real service. New ideas live in the app's own
+  `pkg/` first and are promoted only once a second consumer wants them.
+- Deliberately excluded, and not oversights: app configuration, auth and session modelling
+  (including the cookie helper — it has one consumer), rate limiting, caching, email, event bus,
+  dependency injection.
+- If a change adds an extension point, a plugin registry, or a config knob whose only caller is
+  hypothetical, delete it instead.
+
+## Conventions
+
+- Prose in this file wraps at roughly 100 columns. Go code follows `gofmt`; comments wrap at 80.
+- Comments say **why**, not what. A comment explaining a non-obvious choice is load-bearing — if a
+  change makes one wrong, update it in the same change.
+- Tests are named for the behaviour they protect, and regression tests say what regressed.
+- Doc comments cite prior art where a decision diverges from an established convention (see
+  `apperr.Kind` on gRPC codes / AIP-193). Record the reason, so the next reader knows it was a
+  decision.
+- Dependency versions are pinned for a reason in at least one place: `obs` imports semconv
+  `v1.43.0` to match the SDK's own, because a mismatch makes `resource.Merge` fail at runtime.
+  Check that pairing when bumping OTel.

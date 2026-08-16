@@ -30,6 +30,10 @@ import (
 	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Donk3ys/kit/apperr"
 	"github.com/Donk3ys/kit/db"
@@ -108,9 +112,14 @@ func run() error {
 	}
 	defer pool.Close()
 
+	svc, err := newWidgetService(&pgStore{pool: pool})
+	if err != nil {
+		return fmt.Errorf("instrumentation: %w", err)
+	}
+
 	srv := &http.Server{
 		Addr:              addr,
-		Handler:           newRouter(logger, registry, &widgetService{store: &pgStore{pool: pool}}),
+		Handler:           newRouter(logger, registry, svc),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
@@ -155,10 +164,19 @@ func newRouter(logger *slog.Logger, registry *prometheus.Registry, svc *widgetSe
 	}
 	r.Mount("/api/v1", widgetRoutes(boundary, svc))
 
-	// In production, wrap the result: otelhttp.NewHandler(r, "api") emits
-	// request spans and metrics under OTel semantic conventions. Omitted here
-	// only to keep this example free of dependencies kit does not already have.
-	return r
+	// This is why kit's httpmw has no tracing or metrics middleware:
+	// otelhttp already emits a server span and the http.server.* metrics under
+	// OTel semantic conventions, which is what makes stock dashboards work
+	// without bespoke queries. It goes outermost so it observes the real
+	// status, including one the recoverer produced.
+	//
+	// WithSpanNameFormatter uses the chi route pattern rather than the raw
+	// path, so span names stay bounded instead of one per widget id.
+	return otelhttp.NewHandler(r, "api",
+		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
+			return r.Method + " " + respond.RouteTemplate(r)
+		}),
+	)
 }
 
 // --- transport -------------------------------------------------------------
@@ -235,6 +253,35 @@ func widgetRoutes(b *respond.Boundary, svc *widgetService) http.Handler {
 type widgetService struct {
 	store  widgetStore
 	nextID func() uuid.UUID // injectable so the end-to-end example is deterministic
+
+	tracer   trace.Tracer
+	created  metric.Int64Counter
+	rejected metric.Int64Counter
+}
+
+// newWidgetService wires app-level instrumentation. Both accessors are safe to
+// call before InitTracing/InitMetrics run — they fall back to no-op providers —
+// so this works identically with observability switched off.
+func newWidgetService(store widgetStore) (*widgetService, error) {
+	meter := obs.Meter("kit/examples/api")
+
+	created, err := meter.Int64Counter("widgets.created",
+		metric.WithDescription("Widgets successfully created."))
+	if err != nil {
+		return nil, err
+	}
+	rejected, err := meter.Int64Counter("widgets.rejected",
+		metric.WithDescription("Widget creations rejected, by reason."))
+	if err != nil {
+		return nil, err
+	}
+
+	return &widgetService{
+		store:    store,
+		tracer:   obs.Tracer("kit/examples/api"),
+		created:  created,
+		rejected: rejected,
+	}, nil
 }
 
 func (s *widgetService) newID() uuid.UUID {
@@ -256,17 +303,28 @@ func (s *widgetService) byID(ctx context.Context, id uuid.UUID) (*Widget, error)
 }
 
 func (s *widgetService) create(ctx context.Context, in CreateWidget) (*Widget, error) {
+	// A child of otelhttp's server span, so a trace shows the request and the
+	// work inside it. Ending it in a defer means it closes on every path.
+	ctx, span := s.tracer.Start(ctx, "widgetService.create")
+	defer span.End()
+	span.SetAttributes(attribute.Int("widget.quantity", in.Quantity))
+
 	widget := Widget{ID: s.newID(), Name: in.Name, Quantity: in.Quantity}
 
 	err := s.store.Create(ctx, widget)
 	switch {
 	case errors.Is(err, errNameTaken):
+		s.rejected.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "name_taken")))
 		return nil, apperr.NewConflict("WIDGET_NAME_TAKEN",
 			"A widget with that name already exists.", err).
 			WithExtensions(map[string]any{"conflictingName": in.Name})
 	case err != nil:
+		s.rejected.Add(ctx, 1, metric.WithAttributes(attribute.String("reason", "storage")))
 		return nil, apperr.NewExternal("WIDGET_INSERT_FAILED", "Try again shortly.", "postgres", err)
 	}
+
+	s.created.Add(ctx, 1)
+	span.SetAttributes(attribute.String("widget.id", widget.ID.String()))
 	return &widget, nil
 }
 

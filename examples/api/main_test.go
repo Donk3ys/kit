@@ -11,6 +11,9 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
+
+	"github.com/Donk3ys/kit/obs"
 )
 
 // memStore is an in-memory widgetStore, so the whole stack can be exercised
@@ -60,14 +63,24 @@ var instanceRE = regexp.MustCompile(`"instance":"[^"]*"`)
 const fixedID = "0f8c9a1e-2b3d-4c5e-8f90-1a2b3c4d5e6f"
 
 func newTestRouter() http.Handler {
-	svc := &widgetService{
-		store:  newMemStore(),
-		nextID: func() uuid.UUID { return uuid.MustParse(fixedID) },
+	h, _ := newTestRouterWithMetrics(nil)
+	return h
+}
+
+// newTestRouterWithMetrics builds the production router over an in-memory
+// store. Only storage is swapped — the middleware chain, boundary, handlers
+// and instrumentation are the same ones main() wires up.
+func newTestRouterWithMetrics(registry *prometheus.Registry) (http.Handler, *widgetService) {
+	svc, err := newWidgetService(newMemStore())
+	if err != nil {
+		panic(err)
 	}
-	// Logs go nowhere so the example output is just the wire traffic. In
+	svc.nextID = func() uuid.UUID { return uuid.MustParse(fixedID) }
+
+	// Logs go nowhere so example output is just the wire traffic. In
 	// production this is where the one-line-per-failure log would appear.
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	return newRouter(logger, nil, svc)
+	return newRouter(logger, registry, svc), svc
 }
 
 // call performs a request and prints what a client would actually see.
@@ -179,4 +192,51 @@ func Example_securityHeaders() {
 	// X-Frame-Options: DENY
 	// Referrer-Policy: no-referrer
 	// Content-Security-Policy: default-src 'none'; frame-ancestors 'none'; base-uri 'none'
+}
+
+// Example_metrics proves the observability wiring actually emits, rather than
+// merely being initialised. otelhttp contributes the http.server.* series
+// under OTel semantic conventions; the service contributes its own counters.
+// Neither needs a collector — the Prometheus exporter is scraped in-process.
+func Example_metrics() {
+	registry, shutdown, err := obs.InitMetrics(obs.MetricConfig{ServiceName: "kit-example-api"})
+	if err != nil {
+		fmt.Println("init:", err)
+		return
+	}
+	defer shutdown(context.Background())
+
+	h, _ := newTestRouterWithMetrics(registry)
+
+	// One success and one conflict, so both counters move.
+	silent(h, http.MethodPost, "/api/v1/widgets", `{"name":"bolt","quantity":12}`)
+	silent(h, http.MethodPost, "/api/v1/widgets", `{"name":"bolt","quantity":3}`)
+
+	w := httptest.NewRecorder()
+	obs.MetricsHandler(registry).ServeHTTP(w,
+		httptest.NewRequest(http.MethodGet, "/metrics", nil))
+
+	// Report presence rather than values: histogram buckets and runtime gauges
+	// are not stable enough to assert on, but the series names are.
+	for _, name := range []string{
+		"http_server_request_duration_seconds", // otelhttp, via semconv
+		"widgets_created_total",                // app instrumentation
+		"widgets_rejected_total",
+		"go_goroutines", // runtime collector registered by InitMetrics
+	} {
+		fmt.Printf("%s: %t\n", name, strings.Contains(w.Body.String(), name))
+	}
+
+	// Output:
+	// http_server_request_duration_seconds: true
+	// widgets_created_total: true
+	// widgets_rejected_total: true
+	// go_goroutines: true
+}
+
+// silent performs a request without printing it.
+func silent(h http.Handler, method, path, body string) {
+	r := httptest.NewRequest(method, path, strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	h.ServeHTTP(httptest.NewRecorder(), r)
 }

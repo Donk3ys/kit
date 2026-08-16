@@ -27,7 +27,7 @@ Its first consumer is the freelance-tax-copilot rebuild.
 | `httpin/` | Strict JSON decoding, validation, path params. |
 | `db/` | pgx pool construction and transaction helpers. |
 | `obs/` | slog + OpenTelemetry bootstrap. No middleware, no logger wrapper. |
-| `examples/api/` | A complete service wiring all six packages, plus `main_test.go`, which drives the whole stack end to end in memory and asserts the exact wire output. |
+| `examples/` | **A separate module.** A complete service wiring all six packages, plus `main_test.go`, which drives the whole stack end to end in memory and asserts the exact wire output — including that traces and metrics actually emit. |
 | `*/example_test.go` | Go `Example` functions — compiled *and run* by `go test`, with `// Output:` assertions. |
 | `README.md` | The composition root, the handler pattern, and a worked problem response. Read it first. |
 
@@ -38,10 +38,18 @@ of them exist to stop a plausible-looking "simplification" from reintroducing a 
 ## Verification commands
 
 ```bash
-go build ./... && go vet ./... && gofmt -l . && go test ./... -cover
+make check
 ```
 
-`gofmt -l .` must print nothing. A change is not done until all four pass.
+Which is `gofmt` + `go build` + `go vet` + `go test`, across **both modules**. Use it rather than
+running the commands by hand: `examples/` is a nested module, so a bare `go test ./...` from the
+root silently skips it and reports success. `make walkthrough` prints the end-to-end example output.
+
+`examples/` is a separate module on purpose — it depends on `otelhttp`, and kit must not, because
+kit deliberately does not provide that middleware. Keeping the dependency there means kit's own
+`require` block stays an honest statement of what the library needs. Note that `go build ./...`
+cannot be used inside `examples/`; it would try to write a binary named `api` over the `api/`
+directory, which is why the Makefile uses vet and test there.
 
 **Usage examples are executable, and that is the point.** `examples/api` is compiled by
 `go build ./...`, and every `Example*` function is run by `go test` with its `// Output:` block
@@ -79,7 +87,9 @@ moving branch.
 
   Before adding anything to `httpmw` or `obs`, check whether chi or OTel already provides it. An
   earlier draft of this module rebuilt six chi middlewares, `WrapResponseWriter`, and both
-  otelhttp's tracing and its metrics.
+  otelhttp's tracing and its metrics. `examples/api` demonstrates the upstream pieces in place, and
+  `Example_metrics` asserts the `http.server.*` series actually arrive — an example that only
+  *initialises* observability without emitting anything is worse than none, because it looks wired.
 
 - **Errors are values.** Constructing one has no side effects — no span recording, no logging — so
   building an error you then wrap or discard cannot pollute a trace. Do not add a `ctx` parameter to

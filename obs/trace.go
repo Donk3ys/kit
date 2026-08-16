@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Donk3ys/kit/apperr"
 )
@@ -85,6 +86,14 @@ func InitTracing(ctx context.Context, cfg TraceConfig) (ShutdownFunc, error) {
 
 	return provider.Shutdown, nil
 }
+
+// Tracer returns a named tracer from the global provider. Before InitTracing
+// runs — or when it is deliberately disabled — this is a no-op tracer, so
+// package-level tracer variables and unconditional span creation are safe.
+//
+// The twin of Meter. Instrumentation calls this rather than otel.Tracer only
+// so that a service imports one observability package, not two.
+func Tracer(name string) trace.Tracer { return otel.Tracer(name) }
 
 // sampler resolves the configured ratio into a sampler.
 //

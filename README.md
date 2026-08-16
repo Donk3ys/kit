@@ -35,17 +35,21 @@ the way a README snippet can:
 | Where | What |
 | --- | --- |
 | `examples/api/` | A complete service — composition root, middleware chain, handlers, a service layer returning `apperr`, and a transaction. Compiled by `go build ./...`. |
-| `examples/api/main_test.go` | **The whole stack working together**, end to end, in memory. Drives the production router through nine requests and asserts the exact wire output of each. No database needed. |
+| `examples/api/main_test.go` | **The whole stack working together**, end to end, in memory. Drives the production router through nine requests and asserts the exact wire output of each, plus panic recovery, security headers, and that traces and metrics really emit. No database needed. |
 | `apperr/example_test.go` | Constructing and classifying errors; copy-on-write builders. |
 | `respond/example_test.go` | The handler pattern, and the exact problem body a client receives. |
 | `httpin/example_test.go` | Decoding, per-field validation failures, content-type enforcement. |
 | `db/example_test.go` | Pool construction, `InTx`, nested transactions, rollback semantics. |
 
 ```bash
-go test ./examples/api -run Example -v   # watch the whole stack respond
-go test ./... -run Example -v            # every example, output asserted
-go doc ./respond                         # read them alongside the API
+make walkthrough              # watch the whole stack respond
+make check                    # both modules: fmt, build, vet, test
+go doc ./respond              # read the examples alongside the API
 ```
+
+`examples/` is a **separate module**, so a bare `go test ./...` from the root skips it — use
+`make check`. It is separate because it depends on `otelhttp` and kit must not: kit deliberately
+does not provide that middleware, and its `require` block should say only what the library needs.
 
 The per-package examples live beside the code they document, not in `examples/`, because Go
 attaches `ExampleNewNotFound` to `apperr.NewNotFound` on pkgsite and in IDEs — and `go vet` fails

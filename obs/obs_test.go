@@ -391,3 +391,17 @@ func TestCombineShutdown(t *testing.T) {
 		}
 	})
 }
+
+// Tracer and Meter are safe before Init* runs: both fall back to the no-op
+// global, so package-level instrumentation variables cannot panic at init.
+func TestTracerAndMeterAreSafeBeforeInit(t *testing.T) {
+	ctx, span := obs.Tracer("kit/obs/test").Start(context.Background(), "unit-of-work")
+	span.End()
+	if ctx == nil {
+		t.Error("Tracer returned a nil context")
+	}
+
+	if _, err := obs.Meter("kit/obs/test").Int64Counter("safe_before_init"); err != nil {
+		t.Errorf("Meter counter creation failed: %v", err)
+	}
+}

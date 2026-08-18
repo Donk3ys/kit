@@ -271,11 +271,20 @@ func silent(h http.Handler, method, path, body string) {
 
 // Example_traces answers "what does the tracer do on success versus error?".
 //
-// It installs a recording provider, issues three requests, and prints the
-// resulting spans with their status. The rule to notice: a 4xx leaves its span
-// Unset because the API worked as designed, while a 5xx is marked Error and
-// carries an exception event. Reddening expected outcomes is how an error-rate
-// panel becomes useless.
+// It installs a recording provider, issues four requests, and prints the
+// resulting spans with their status. Two rules to notice.
+//
+// A 4xx leaves its span Unset because the API worked as designed, while a 5xx
+// is marked Error and carries an exception event. Reddening expected outcomes
+// is how an error-rate panel becomes useless.
+//
+// And span names are route patterns, not paths: the read below is of a real
+// widget id but the span is named "GET /api/v1/widgets/{id}". Naming it after
+// the path would mint a new span name per widget, which is what makes a
+// service's span-name list unusable. That case is here deliberately — an
+// earlier version of this example exercised only fixed paths, where template
+// and path are identical, and so kept asserting the right output while the
+// router had in fact been naming spans after raw paths all along.
 func Example_traces() {
 	exporter := tracetest.NewInMemoryExporter()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
@@ -289,6 +298,7 @@ func Example_traces() {
 
 	silent(h, http.MethodPost, "/api/v1/widgets", `{"name":"bolt","quantity":12}`) // 201
 	silent(h, http.MethodPost, "/api/v1/widgets", `{"name":"bolt","quantity":3}`)  // 409
+	silent(h, http.MethodGet, "/api/v1/widgets/"+fixedID, "")                      // 200, parameterised
 	silent(h, http.MethodGet, "/api/v1/boom", "")                                  // 500, panic
 
 	for _, s := range exporter.GetSpans() {
@@ -312,5 +322,6 @@ func Example_traces() {
 	// POST /api/v1/widgets         Unset
 	// widgetService.create         Unset
 	// POST /api/v1/widgets         Unset WIDGET_NAME_TAKEN
+	// GET /api/v1/widgets/{id}     Unset
 	// GET /api/v1/boom             Error PANIC +exception
 }

@@ -7,12 +7,16 @@
 //
 //	go test ./examples/api -run Example -v
 //
-// Running the real thing needs a PostgreSQL:
+// Running the real thing needs a PostgreSQL, and watching what it emits needs
+// somewhere for the telemetry to land. examples/infra/local provides both:
 //
-//	createdb kitdemo
-//	psql kitdemo -c 'CREATE TABLE widgets (
-//	    id UUID PRIMARY KEY, name TEXT NOT NULL UNIQUE, quantity INT NOT NULL)'
-//	DATABASE_URL=postgres://localhost:5432/kitdemo go run ./examples/api
+//	make docker-obs     # postgres, and Grafana/Tempo/Loki, Prometheus, Alloy
+//	make demo           # this service, on the host, wired to all of it
+//	make demo-requests  # drive it, then read http://localhost:3001
+//
+// That is the only way to see the parts main_test.go cannot reach: the db
+// package really executing, spans arriving in a backend, and a log line
+// linking to the trace it belongs to.
 package main
 
 import (
@@ -153,10 +157,12 @@ func newRouter(logger *slog.Logger, registry *prometheus.Registry, svc *widgetSe
 	boundary.TypeBaseURI = "https://api.example.com/problems"
 
 	r := chi.NewRouter()
-	// Order matters. RequestID first — both the access log and the problem
-	// body's instance member read it. AccessLog outside Recoverer, so a
-	// panicking request still gets an access line carrying the status the
-	// recoverer settled on.
+	// Order matters. spanRouteName first, so the rename on the way back out
+	// happens after everything below has finished with the request. RequestID
+	// next — both the access log and the problem body's instance member read
+	// it. AccessLog outside Recoverer, so a panicking request still gets an
+	// access line carrying the status the recoverer settled on.
+	r.Use(spanRouteName)
 	r.Use(chimw.RequestID)
 	r.Use(httpmw.AccessLog(logger, "/healthz", "/metrics"))
 	r.Use(httpmw.Recoverer(boundary))
@@ -178,13 +184,37 @@ func newRouter(logger *slog.Logger, registry *prometheus.Registry, svc *widgetSe
 	// without bespoke queries. It goes outermost so it observes the real
 	// status, including one the recoverer produced.
 	//
-	// WithSpanNameFormatter uses the chi route pattern rather than the raw
-	// path, so span names stay bounded instead of one per widget id.
-	return otelhttp.NewHandler(r, "api",
-		otelhttp.WithSpanNameFormatter(func(_ string, r *http.Request) string {
-			return r.Method + " " + respond.RouteTemplate(r)
-		}),
-	)
+	// Span naming is handled by spanRouteName inside the chain, not by
+	// WithSpanNameFormatter here — see that function for why.
+	return otelhttp.NewHandler(r, "api")
+}
+
+// spanRouteName gives the server span chi's route pattern, once there is one.
+//
+// The obvious spelling of this is otelhttp.WithSpanNameFormatter calling
+// respond.RouteTemplate, and it silently does the wrong thing: otelhttp wraps
+// the router from the outside, so it names the span before chi has matched
+// anything, RouteTemplate finds no pattern and falls back to r.URL.Path, and
+// every widget id becomes its own span name. That is precisely the cardinality
+// blow-up the formatter looks like it is preventing.
+//
+// Renaming after next.ServeHTTP returns fixes it: routing has resolved by then,
+// and otelhttp does not end the span until this whole chain unwinds. It is the
+// same "act on the way back out" shape httpmw.AccessLog uses to log the route.
+func spanRouteName(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		next.ServeHTTP(w, r)
+
+		// An unmatched request never gets a pattern, and RouteTemplate would
+		// fall back to the raw path again. Leave those alone: otelhttp names a
+		// routeless request after its method, which is bounded.
+		if rctx := chi.RouteContext(r.Context()); rctx == nil || rctx.RoutePattern() == "" {
+			return
+		}
+		if span := trace.SpanFromContext(r.Context()); span.IsRecording() {
+			span.SetName(r.Method + " " + respond.RouteTemplate(r))
+		}
+	})
 }
 
 // --- transport -------------------------------------------------------------

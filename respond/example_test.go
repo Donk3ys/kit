@@ -81,34 +81,9 @@ func ExampleBoundary_Error() {
 	// {"code":"INTERNAL_ERROR","detail":"An unexpected error occurred.","status":500,"title":"Internal Server Error","type":"about:blank"}
 }
 
-// Extension members are top-level siblings of the standard ones, so a client
-// reads requiredTier alongside status.
-func ExampleBoundary_Error_extensions() {
-	b := quietBoundary()
-
-	err := apperr.NewForbidden("INSUFFICIENT_TIER", "Trusted tier is required.", nil).
-		WithExtensions(map[string]any{"requiredTier": "trusted"})
-
-	w := httptest.NewRecorder()
-	b.Error(w, httptest.NewRequest(http.MethodPost, "/deltas", nil), err)
-
-	fmt.Println(w.Body.String())
-
-	// Output:
-	// {"code":"INSUFFICIENT_TIER","detail":"Trusted tier is required.","requiredTier":"trusted","status":403,"title":"Forbidden","type":"about:blank"}
-}
-
-// TypeBaseURI turns the type member into a documentation link per code.
-func ExampleBoundary_typeBaseURI() {
-	b := quietBoundary()
-	b.TypeBaseURI = "https://api.example.com/problems"
-
-	w := httptest.NewRecorder()
-	b.Error(w, httptest.NewRequest(http.MethodGet, "/profiles/42", nil),
-		apperr.NewNotFound("PROFILE_NOT_FOUND", "Not found.", nil))
-
-	fmt.Println(w.Body.String())
-
-	// Output:
-	// {"code":"PROFILE_NOT_FOUND","detail":"Not found.","status":404,"title":"Not Found","type":"https://api.example.com/problems/profile-not-found"}
-}
+// Extension members and TypeBaseURI are deliberately not shown here. Both are
+// asserted on the wire by examples/api's Example_endToEnd — the 409 carries a
+// conflictingName member, and every problem type there is a documentation link
+// — and pinned by TestExtensionsAreMergedAsTopLevelMembers and
+// TestTypeBaseURIProducesADocumentationLink. Re-demonstrating them at the
+// symbol would only duplicate output that already has two homes.

@@ -1,0 +1,21 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # The example service runs on the host, not in this network, so the target is
+  # the host gateway rather than a container name -- see the extra_hosts entry
+  # on the prometheus service in docker-compose.yml.
+  #
+  # It is scraped rather than pushed because obs.InitMetrics builds a Prometheus
+  # exporter and hands back a registry for obs.MetricsHandler to serve. Traces
+  # go the other way, pushed over OTLP to lgtm. Metrics pull, traces push --
+  # that split is the thing to notice here.
+  #
+  # 8081 rather than the service's own :8080 default, because
+  # freelance-tax-copilot's API holds 8080 on this machine. It must agree with
+  # API_PORT in the root Makefile.
+  - job_name: kit-example-api
+    static_configs:
+      - targets: ["host.docker.internal:8081"]
+    metrics_path: /metrics

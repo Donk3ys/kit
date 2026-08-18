@@ -40,6 +40,7 @@ the way a README snippet can:
 | `respond/example_test.go` | The handler pattern, and the exact problem body a client receives. |
 | `httpin/example_test.go` | Decoding, per-field validation failures, content-type enforcement. |
 | `db/example_test.go` | Pool construction, `InTx`, nested transactions, rollback semantics. |
+| `examples/infra/local/` | Docker Compose: Postgres and a full LGTM stack, so the service can be run for real and its telemetry actually looked at. |
 
 ```bash
 make walkthrough              # watch the whole stack respond
@@ -51,18 +52,51 @@ go doc ./respond              # read the examples alongside the API
 `make check`. It is separate because it depends on `otelhttp` and kit must not: kit deliberately
 does not provide that middleware, and its `require` block should say only what the library needs.
 
+**Start with `examples/api`.** It is the front door: one service wiring all six packages, and the
+only place middleware ordering, the boundary and observability are shown working together.
+
 The per-package examples live beside the code they document, not in `examples/`, because Go
 attaches `ExampleNewNotFound` to `apperr.NewNotFound` on pkgsite and in IDEs — and `go vet` fails
-an `Example` name that does not resolve to a real identifier in that package. `examples/api` is
-where they are shown composed.
+an `Example` name that does not resolve to a real identifier in that package. They answer a
+narrower question than `examples/api` does: what one symbol does at its edges — what a builder
+returns, what an unclassified error becomes, what a config value translates to. Behaviour that only
+shows up in a request travelling through a chain belongs in `examples/api` instead, which is why
+`httpmw` and `obs` have no `example_test.go`: a middleware needs a chain and observability needs a
+live app.
 
-To run the example service:
+### Running it for real
+
+`main_test.go` proves the wire output but swaps the database for an in-memory
+store, so `db` is only ever typechecked there. `examples/infra/local` runs the
+real thing — Postgres, plus Grafana with Tempo, Loki, Prometheus and Alloy:
 
 ```bash
-createdb kitdemo
-psql kitdemo -c 'CREATE TABLE widgets (id UUID PRIMARY KEY, name TEXT NOT NULL, quantity INT NOT NULL)'
-DATABASE_URL=postgres://localhost:5432/kitdemo go run ./examples/api
+make docker-obs     # database + the observability stack
+make demo           # the service, on the host, wired to both
+make demo-requests  # in a second terminal: drive it and print where to look
 ```
+
+Then open Grafana at <http://localhost:3001>:
+
+| Pillar | Where | What kit is doing |
+| --- | --- | --- |
+| Traces | Explore → Tempo | `otelhttp`'s server span, with `widgetService.create` and `INSERT widgets` nested under it |
+| Logs | Explore → Loki, `{service_name="kit-example-api"}` | `obs.NewLogger`'s JSON; expand a line and click **TraceID** to jump to that request's trace |
+| Metrics | Explore → Prometheus | `http_server_request_duration_seconds` from otelhttp, `widgets_created_total` from the service |
+
+The log→trace jump is the one worth doing by hand: it works because
+`obs.WithTraceContext` puts `trace_id` on every record logged with a context
+inside a recording span, which is the entire reason that function exists.
+
+Metrics are **scraped** while traces are **pushed** — `obs.InitMetrics` builds a
+Prometheus exporter, `obs.InitTracing` an OTLP client. That is why the stack has
+a Prometheus alongside the all-in-one image, and why the service runs on the
+host but is still reachable at `host.docker.internal`.
+
+Ports avoid freelance-tax-copilot's (Postgres on 5433, the API on 8081); see
+`examples/infra/local/.env.example` to change them. `make docker-reset` drops
+the volumes, which is required after editing `schema.sql` because Postgres runs
+`initdb` scripts only against an empty data directory.
 
 ## Composition root
 

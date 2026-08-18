@@ -1,0 +1,52 @@
+// Ships the example service's logs into Loki.
+//
+// The service runs on the host, so there is no container stdout to tail. `make
+// demo` redirects its JSON logs to a file in KIT_LOG_DIR and this pipeline
+// watches that directory. That is the only reason a log shipper is involved at
+// all: traces and metrics leave the process over the network, but logs go to
+// stdout, and something has to pick them up.
+
+local.file_match "kit" {
+	path_targets = [{
+		__path__ = "/var/log/kit/*.log",
+		job      = "kit-example-api",
+	}]
+}
+
+loki.source.file "kit" {
+	targets    = local.file_match.kit.targets
+	forward_to = [loki.process.kit.receiver]
+}
+
+loki.process "kit" {
+	// obs.NewLogger emits slog JSON. The service.name key is dotted, following
+	// OTel semantic conventions, so it needs a quoted JMESPath expression --
+	// a bare service.name would be read as a nested object lookup and silently
+	// yield nothing. Loki label names cannot contain a dot, hence the rename.
+	stage.json {
+		expressions = {
+			level        = "level",
+			service_name = "\"service.name\"",
+		}
+	}
+
+	// filename would make every restart of the service a new stream.
+	stage.label_drop {
+		values = ["filename"]
+	}
+
+	stage.labels {
+		values = {
+			level        = "",
+			service_name = "",
+		}
+	}
+
+	forward_to = [loki.write.lgtm.receiver]
+}
+
+loki.write "lgtm" {
+	endpoint {
+		url = "http://lgtm:3100/loki/api/v1/push"
+	}
+}

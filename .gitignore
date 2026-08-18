@@ -7,6 +7,10 @@ coverage.html
 go.work
 go.work.sum
 
+# Local compose overrides — .env.example is the tracked template, and a real
+# .env carries a password. docker compose reads it automatically.
+.env
+
 # Editor and OS
 .DS_Store
 .idea/

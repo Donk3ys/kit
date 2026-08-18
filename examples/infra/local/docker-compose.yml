@@ -1,0 +1,97 @@
+# Local stack for examples/api, adapted from nodeb8's infra/local.
+#
+# Trimmed to what kit actually needs. nodeb8 also runs valkey, nats and
+# smtp4dev; kit deliberately provides no cache, event bus or email, so shipping
+# them here would advertise a scope the library does not have.
+#
+# The API runs on the host via `make demo`, not in a container, so the loop
+# stays a Go build instead of an image build. Two consequences show up below:
+# Prometheus scrapes host.docker.internal rather than a service name, and Alloy
+# tails a host directory rather than a container's stdout.
+name: kit-example
+
+networks:
+  kit:
+    driver: bridge
+
+volumes:
+  postgres-data:
+  prometheus-data:
+  grafana-data:
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    networks: [ kit ]
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-kit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
+      POSTGRES_DB: ${POSTGRES_DB:-kitdemo}
+    ports:
+      # 5433, not 5432: freelance-tax-copilot -- kit's first consumer, and so
+      # the stack most likely to be up at the same time -- holds 5432.
+      - "${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      # initdb runs this only when the data volume is empty. After editing
+      # schema.sql use `make docker-reset`; a restart will not re-apply it.
+      - ./schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-kit} -d ${POSTGRES_DB:-kitdemo}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- Observability (opt-in: docker compose --profile obs up -d) ---
+  #
+  # A profile, so the default `docker compose up -d` is just a database. Running
+  # the example needs Postgres; seeing what it emits is a second, larger step.
+
+  # One image for three pillars: Tempo for traces, Loki for logs, Grafana to
+  # read them, and an OTLP receiver on 4317 that obs.InitTracing pushes to.
+  lgtm:
+    image: grafana/otel-lgtm:latest
+    profiles: [ obs ]
+    restart: unless-stopped
+    networks: [ kit ]
+    ports:
+      - "${GRAFANA_PORT:-3001}:3000"
+      - "${OTLP_GRPC_PORT:-4317}:4317"
+      - "${OTLP_HTTP_PORT:-4318}:4318"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      # Same filename as the image's own provisioning file, so this replaces it.
+      # Mounting under any other name would load both and clash on datasource uids.
+      - ./grafana-datasources.yaml:/otel-lgtm/grafana/conf/provisioning/datasources/grafana-datasources.yaml:ro
+
+  # Separate from the Prometheus inside the lgtm image, which cannot help here:
+  # obs.InitMetrics exports by being scraped, and nothing inside that image
+  # knows how to reach a process on the host.
+  prometheus:
+    image: prom/prometheus:latest
+    profiles: [ obs ]
+    restart: unless-stopped
+    networks: [ kit ]
+    # Resolves host.docker.internal on Linux, where it is not built in.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - prometheus-data:/prometheus
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+
+  alloy:
+    image: grafana/alloy:latest
+    profiles: [ obs ]
+    restart: unless-stopped
+    networks: [ kit ]
+    volumes:
+      - ./config.alloy:/etc/alloy/config.alloy:ro
+      # Where `make demo` writes the service's JSON logs.
+      - ${KIT_LOG_DIR:-/tmp/kit-logs}:/var/log/kit:ro
+    command: run /etc/alloy/config.alloy

@@ -1,0 +1,66 @@
+apiVersion: 1
+
+# Replaces the file of the same name inside grafana/otel-lgtm rather than
+# sitting beside it. That matters: the image's own file already claims the uids
+# prometheus, tempo and loki, so a second file adding them under a different
+# name would collide instead of override.
+#
+# The correlations below are the reason to run all three pillars rather than
+# just reading the terminal.
+datasources:
+  # The sidecar Prometheus, not the one inside this image. obs.InitMetrics
+  # exports by being scraped, and nothing inside the lgtm container knows how to
+  # reach a process running on the host -- see prometheus.yml.
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://prometheus:9090
+    editable: true
+    jsonData:
+      timeInterval: 5s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+
+  # Tempo and Loki run inside this same container, so they are reachable on
+  # localhost; only Prometheus above is a separate service.
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    url: http://localhost:3200
+    editable: true
+    jsonData:
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true
+      search:
+        hide: false
+      # Trace -> logs. The json parser is required because trace_id lives in the
+      # log line's body, not in a label; see the derivedFields note below.
+      tracesToLogsV2:
+        datasourceUid: loki
+        customQuery: true
+        query: '{service_name="kit-example-api"} | json | trace_id=`$${__trace.traceId}`'
+
+  - name: Loki
+    type: loki
+    uid: loki
+    url: http://localhost:3100
+    isDefault: true
+    editable: true
+    jsonData:
+      # Log -> trace. This matches because obs.WithTraceContext adds a literal
+      # trace_id field to every record logged with a context inside a recording
+      # span (obs/log.go). Rename that field and this breaks silently.
+      #
+      # It reads the line body rather than a label, unlike the image's default,
+      # which expects a trace_id label. That is deliberate: a trace ID is unique
+      # per request, and promoting it to a Loki label would create one stream
+      # per request -- the classic cardinality blow-up.
+      derivedFields:
+        - name: TraceID
+          matcherRegex: '"trace_id":"(\w+)"'
+          url: "$${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "Trace: $${__value.raw}"

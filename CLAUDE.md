@@ -45,6 +45,16 @@ Which is `gofmt` + `go build` + `go vet` + `go test`, across **both modules**. U
 running the commands by hand: `examples/` is a nested module, so a bare `go test ./...` from the
 root silently skips it and reports success. `make walkthrough` prints the end-to-end example output.
 
+`examples/infra/local` runs the example against real infrastructure — Postgres plus Grafana,
+Tempo, Loki, Prometheus and Alloy — via `make docker-obs`, `make demo`, `make demo-requests`. It is
+adapted from `nodeb8/infra/local` rather than invented, and trimmed: no valkey, nats or smtp4dev,
+because kit provides no cache, event bus or email and the stack should not imply otherwise. Two
+things there are load-bearing and easy to break. `grafana-datasources.yaml` must keep the filename
+the `grafana/otel-lgtm` image uses, or it lands beside the image's own file and collides on
+datasource uids instead of replacing it. And the Makefile creates `KIT_LOG_DIR` before `docker
+compose` runs, because Docker creates a missing bind-mount source itself, as root, after which the
+demo cannot write its logs.
+
 `examples/` is a separate module on purpose — it depends on `otelhttp`, and kit must not, because
 kit deliberately does not provide that middleware. Keeping the dependency there means kit's own
 `require` block stays an honest statement of what the library needs. Note that `go build ./...`
@@ -61,6 +71,26 @@ Per-package examples stay **beside the code they document**. Do not move them in
 `go vet` rejects an `Example` name that does not resolve to an identifier in the package under
 test (`ExampleNoSuchSymbol refers to unknown identifier`), and pkgsite attaches each one to the
 symbol it names. `examples/api` is where they are shown composed.
+
+**The two kinds of example have different jobs, and neither replaces the other.**
+
+- A **per-package `Example`** documents one symbol's semantics at its edges: what a builder
+  returns, what an unclassified error becomes, what a config value translates to. It renders on
+  that symbol on pkgsite and under `go doc`, which is where a reader who already knows what they
+  want looks. Add one when the behaviour is a property of the value or the function rather than of
+  a request travelling through a chain.
+- **`examples/api`** documents composition: middleware ordering, the `Wrap` pattern, otelhttp
+  outermost, and the wire bytes a client actually receives. `httpmw` and `obs` have no
+  `example_test.go` at all, and that is the rule working rather than an omission — a middleware
+  needs a chain and observability needs a live app, so both can only be demonstrated composed.
+
+Two consequences to know before editing either. **`db` is compiled but never executed by
+`examples/api`** — `main_test.go` swaps in `memStore`, so `run()` and `pgStore` are typechecked and
+nothing more, which makes `db/example_test.go` the only place that package's behaviour is asserted.
+And a per-package example that merely re-demonstrates something `Example_endToEnd` already asserts
+byte-for-byte is duplication: delete it, leave a comment saying where the behaviour is now shown,
+and keep a named unit test pinning it. Three were removed this way — extension members and
+`TypeBaseURI` from `respond`, unknown-field rejection from `httpin`.
 
 Coverage is high on purpose — this is the code every service depends on, so a bug here is a bug
 everywhere. Do not let it fall without saying why. `db.NewPool` is the one known gap: it needs a

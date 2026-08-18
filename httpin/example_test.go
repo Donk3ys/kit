@@ -53,19 +53,11 @@ func ExampleDecodeAndValidate_validation() {
 	// taxYear: must be one of: 2026, 2027
 }
 
-// Decoding is strict: a misspelled field is rejected rather than silently
-// ignored, so the client learns about it immediately.
-func ExampleDecodeAndValidate_unknownField() {
-	w, r := jsonRequest(`{"email":"a@b.com","taxYear":2026,"taxYr":2027}`)
-
-	_, err := httpin.DecodeAndValidate[CreateProfile](w, r, 0)
-
-	appErr, _ := apperr.From(err)
-	params := appErr.Extensions[apperr.ExtensionKeyInvalidParams].([]apperr.InvalidParam)
-	fmt.Printf("%s: %s\n", params[0].Name, params[0].Reason)
-
-	// Output: taxYr: is not a recognised field
-}
+// Strict decoding — a misspelled field is rejected rather than silently
+// ignored — is deliberately not shown here. examples/api's Example_endToEnd
+// asserts that response byte-for-byte, and TestUnknownFieldsAreRejectedAndNamed
+// pins the behaviour; the example above already shows how to read invalid
+// params off the returned error.
 
 // Requiring application/json is also a CSRF control: a cross-origin form
 // cannot set that content type without a preflight.

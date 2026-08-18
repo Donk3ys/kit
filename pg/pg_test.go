@@ -1,4 +1,4 @@
-package db_test
+package pg_test
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/Donk3ys/kit/apperr"
-	"github.com/Donk3ys/kit/db"
+	"github.com/Donk3ys/kit/pg"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -16,18 +16,18 @@ const testDSN = "postgres://user:pw@localhost:5432/appdb"
 
 func TestPoolConfigDefaultsAndOverrides(t *testing.T) {
 	t.Run("connect timeout defaults rather than staying unbounded", func(t *testing.T) {
-		cfg, err := db.PoolConfig(db.Config{DSN: testDSN})
+		cfg, err := pg.PoolConfig(pg.Config{DSN: testDSN})
 		if err != nil {
 			t.Fatalf("PoolConfig returned %v", err)
 		}
-		if cfg.ConnConfig.ConnectTimeout != db.DefaultConnectTimeout {
+		if cfg.ConnConfig.ConnectTimeout != pg.DefaultConnectTimeout {
 			t.Errorf("ConnectTimeout = %v, want %v",
-				cfg.ConnConfig.ConnectTimeout, db.DefaultConnectTimeout)
+				cfg.ConnConfig.ConnectTimeout, pg.DefaultConnectTimeout)
 		}
 	})
 
 	t.Run("pool sizing is applied", func(t *testing.T) {
-		cfg, err := db.PoolConfig(db.Config{
+		cfg, err := pg.PoolConfig(pg.Config{
 			DSN:             testDSN,
 			MaxConns:        25,
 			MinConns:        5,
@@ -53,7 +53,7 @@ func TestPoolConfigDefaultsAndOverrides(t *testing.T) {
 // PostgreSQL expresses these as bare milliseconds; a Go duration written
 // verbatim would be silently rejected at connection time.
 func TestPoolConfigWritesTimeoutsAsMilliseconds(t *testing.T) {
-	cfg, err := db.PoolConfig(db.Config{
+	cfg, err := pg.PoolConfig(pg.Config{
 		DSN:                             testDSN,
 		ApplicationName:                 "ftc-api",
 		StatementTimeout:                30 * time.Second,
@@ -80,7 +80,7 @@ func TestPoolConfigWritesTimeoutsAsMilliseconds(t *testing.T) {
 // Zero means "keep the server default" — this package must not invent a
 // statement timeout that could kill a legitimate long-running query.
 func TestPoolConfigLeavesUnsetTimeoutsAlone(t *testing.T) {
-	cfg, err := db.PoolConfig(db.Config{DSN: testDSN})
+	cfg, err := pg.PoolConfig(pg.Config{DSN: testDSN})
 	if err != nil {
 		t.Fatalf("PoolConfig returned %v", err)
 	}
@@ -105,7 +105,7 @@ func TestPoolConfigRejectsBadInputWithoutEchoingTheDSN(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := db.PoolConfig(db.Config{DSN: tt.dsn})
+			_, err := pg.PoolConfig(pg.Config{DSN: tt.dsn})
 			if err == nil {
 				t.Fatal("PoolConfig accepted an invalid DSN")
 			}
@@ -118,6 +118,32 @@ func TestPoolConfigRejectsBadInputWithoutEchoingTheDSN(t *testing.T) {
 				t.Errorf("SafeDetail = %q, want the generic message", appErr.SafeDetail)
 			}
 		})
+	}
+}
+
+// A bad DSN is a deployment mistake, not an outage. NewPool must hand back
+// PoolConfig's classification unchanged rather than relabelling it
+// DATABASE_UNAVAILABLE, which would send whoever is on call to look at a
+// database that was never the problem.
+//
+// This is the one NewPool path that needs no server; the rest live in
+// kit/pgtest, which runs a real PostgreSQL.
+func TestNewPoolPropagatesConfigErrorsWithoutCallingThemAnOutage(t *testing.T) {
+	pool, err := pg.NewPool(t.Context(), pg.Config{DSN: ""})
+	if err == nil {
+		pool.Close()
+		t.Fatal("NewPool accepted an empty DSN")
+	}
+
+	appErr, ok := apperr.From(err)
+	if !ok {
+		t.Fatalf("error was not an *apperr.Error: %v", err)
+	}
+	if appErr.Code != "DATABASE_CONFIG_INVALID" {
+		t.Errorf("Code = %q, want DATABASE_CONFIG_INVALID", appErr.Code)
+	}
+	if appErr.Kind != apperr.KindInternal {
+		t.Errorf("Kind = %v, want %v", appErr.Kind, apperr.KindInternal)
 	}
 }
 
@@ -156,7 +182,7 @@ func (s *stubBeginner) Begin(context.Context) (pgx.Tx, error) {
 
 func TestPreserveRollbackErrorReturnsNilWhenNothingFailed(t *testing.T) {
 	tx := &stubTx{}
-	if err := db.PreserveRollbackError(context.Background(), tx, nil, "scope"); err != nil {
+	if err := pg.PreserveRollbackError(context.Background(), tx, nil, "scope"); err != nil {
 		t.Errorf("returned %v, want nil", err)
 	}
 	if tx.rolledBack {
@@ -168,14 +194,14 @@ func TestPreserveRollbackErrorReturnsTheOperationErrorOnCleanRollback(t *testing
 	tx := &stubTx{}
 	opErr := apperr.NewConflict("EMAIL_TAKEN", "Already registered.", nil)
 
-	err := db.PreserveRollbackError(context.Background(), tx, opErr, "register")
+	err := pg.PreserveRollbackError(context.Background(), tx, opErr, "register")
 	if !tx.rolledBack {
 		t.Error("did not roll back after a failed operation")
 	}
 	if !errors.Is(err, opErr) {
 		t.Errorf("returned %v, want the original operation error", err)
 	}
-	var rbErr *db.RollbackError
+	var rbErr *pg.RollbackError
 	if errors.As(err, &rbErr) {
 		t.Error("a clean rollback was reported as a RollbackError")
 	}
@@ -187,9 +213,9 @@ func TestFailedRollbackOutranksTheOperationError(t *testing.T) {
 	tx := &stubTx{rollbackErr: errors.New("connection reset")}
 	opErr := apperr.NewNotFound("PROFILE_NOT_FOUND", "Not found.", nil)
 
-	err := db.PreserveRollbackError(context.Background(), tx, opErr, "load")
+	err := pg.PreserveRollbackError(context.Background(), tx, opErr, "load")
 
-	var rbErr *db.RollbackError
+	var rbErr *pg.RollbackError
 	if !errors.As(err, &rbErr) {
 		t.Fatalf("returned %T, want a *RollbackError", err)
 	}
@@ -213,9 +239,9 @@ func TestClosedTransactionIsNotACleanupFailure(t *testing.T) {
 	tx := &stubTx{rollbackErr: pgx.ErrTxClosed}
 	opErr := errors.New("commit failed")
 
-	err := db.PreserveRollbackError(context.Background(), tx, opErr, "commit")
+	err := pg.PreserveRollbackError(context.Background(), tx, opErr, "commit")
 
-	var rbErr *db.RollbackError
+	var rbErr *pg.RollbackError
 	if errors.As(err, &rbErr) {
 		t.Fatal("ErrTxClosed was reported as a cleanup failure")
 	}
@@ -234,7 +260,7 @@ func TestRollbackRunsEvenWhenTheRequestContextIsCancelled(t *testing.T) {
 	tx := &stubTx{}
 	opErr := errors.New("query cancelled")
 
-	err := db.PreserveRollbackError(ctx, tx, opErr, "scope")
+	err := pg.PreserveRollbackError(ctx, tx, opErr, "scope")
 
 	if !tx.rolledBack {
 		t.Fatal("no rollback was attempted on a cancelled context")
@@ -256,7 +282,7 @@ func TestRollbackContextKeepsRequestValues(t *testing.T) {
 
 	var seen any
 	tx := &stubTx{}
-	db.PreserveRollbackError(ctx, valueCapturingRollbacker{tx, func(c context.Context) {
+	pg.PreserveRollbackError(ctx, valueCapturingRollbacker{tx, func(c context.Context) {
 		seen = c.Value(ctxKey{})
 	}}, errors.New("failed"), "scope")
 
@@ -279,7 +305,7 @@ func TestInTxCommitsOnSuccess(t *testing.T) {
 	tx := &stubTx{}
 	b := &stubBeginner{tx: tx}
 
-	err := db.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return nil })
+	err := pg.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return nil })
 	if err != nil {
 		t.Fatalf("InTx returned %v", err)
 	}
@@ -296,7 +322,7 @@ func TestInTxRollsBackOnFailure(t *testing.T) {
 	b := &stubBeginner{tx: tx}
 	opErr := apperr.NewConflict("CONFLICT", "Conflict.", nil)
 
-	err := db.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return opErr })
+	err := pg.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return opErr })
 
 	if tx.committed {
 		t.Error("committed a failed transaction")
@@ -312,7 +338,7 @@ func TestInTxRollsBackOnFailure(t *testing.T) {
 func TestInTxReportsBeginAndCommitFailuresAsExternal(t *testing.T) {
 	t.Run("begin", func(t *testing.T) {
 		b := &stubBeginner{beginErr: errors.New("pool exhausted")}
-		err := db.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return nil })
+		err := pg.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return nil })
 		if !apperr.IsKind(err, apperr.KindExternal) {
 			t.Errorf("error = %v, want an external failure", err)
 		}
@@ -321,7 +347,7 @@ func TestInTxReportsBeginAndCommitFailuresAsExternal(t *testing.T) {
 	t.Run("commit", func(t *testing.T) {
 		tx := &stubTx{commitErr: errors.New("serialization failure")}
 		b := &stubBeginner{tx: tx}
-		err := db.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return nil })
+		err := pg.InTx(context.Background(), b, "scope", func(pgx.Tx) error { return nil })
 		if !apperr.IsKind(err, apperr.KindExternal) {
 			t.Errorf("error = %v, want an external failure", err)
 		}
@@ -333,7 +359,7 @@ func TestInTxReportsBeginAndCommitFailuresAsExternal(t *testing.T) {
 }
 
 func TestRollbackErrorMessageNamesBothFailures(t *testing.T) {
-	err := &db.RollbackError{
+	err := &pg.RollbackError{
 		Scope:     "register",
 		Cause:     errors.New("connection reset"),
 		Operation: errors.New("duplicate key"),
@@ -363,7 +389,7 @@ func (stubQueryTracer) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryE
 func TestPoolConfigInstallsAQueryTracer(t *testing.T) {
 	tracer := stubQueryTracer{}
 
-	cfg, err := db.PoolConfig(db.Config{DSN: testDSN, QueryTracer: tracer})
+	cfg, err := pg.PoolConfig(pg.Config{DSN: testDSN, QueryTracer: tracer})
 	if err != nil {
 		t.Fatalf("PoolConfig returned %v", err)
 	}
@@ -373,7 +399,7 @@ func TestPoolConfigInstallsAQueryTracer(t *testing.T) {
 }
 
 func TestPoolConfigLeavesTracerUnsetByDefault(t *testing.T) {
-	cfg, err := db.PoolConfig(db.Config{DSN: testDSN})
+	cfg, err := pg.PoolConfig(pg.Config{DSN: testDSN})
 	if err != nil {
 		t.Fatalf("PoolConfig returned %v", err)
 	}

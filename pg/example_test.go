@@ -1,4 +1,4 @@
-package db_test
+package pg_test
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/Donk3ys/kit/apperr"
-	"github.com/Donk3ys/kit/db"
+	"github.com/Donk3ys/kit/pg"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -20,7 +20,7 @@ var pool *pgxpool.Pool
 func ExampleNewPool() {
 	ctx := context.Background()
 
-	pool, err := db.NewPool(ctx, db.Config{
+	pool, err := pg.NewPool(ctx, pg.Config{
 		DSN:             "postgres://user:pw@localhost:5432/appdb",
 		ApplicationName: "ftc-api",
 		MaxConns:        25,
@@ -42,7 +42,7 @@ func ExampleNewPool() {
 func ExampleInTx() {
 	ctx := context.Background()
 
-	err := db.InTx(ctx, pool, "attach_payslip", func(tx pgx.Tx) error {
+	err := pg.InTx(ctx, pool, "attach_payslip", func(tx pgx.Tx) error {
 		if _, err := tx.Exec(ctx, `UPDATE ledger SET payslip_id = $1 WHERE id = $2`, 7, 42); err != nil {
 			return apperr.NewExternal("LEDGER_UPDATE_FAILED",
 				"Try again shortly.", "postgres", err)
@@ -61,8 +61,8 @@ func ExampleInTx() {
 func ExampleInTx_nested() {
 	ctx := context.Background()
 
-	_ = db.InTx(ctx, pool, "outer", func(tx pgx.Tx) error {
-		return db.InTx(ctx, tx, "inner", func(pgx.Tx) error {
+	_ = pg.InTx(ctx, pool, "outer", func(tx pgx.Tx) error {
+		return pg.InTx(ctx, tx, "inner", func(pgx.Tx) error {
 			return nil
 		})
 	})
@@ -75,11 +75,11 @@ func ExamplePreserveRollbackError() {
 	ctx := context.Background()
 	opErr := apperr.NewConflict("EMAIL_TAKEN", "Already registered.", nil)
 
-	clean := db.PreserveRollbackError(ctx, &stubTx{}, opErr, "register")
+	clean := pg.PreserveRollbackError(ctx, &stubTx{}, opErr, "register")
 	fmt.Println(errors.Is(clean, opErr), isCleanupFailure(clean))
 
 	broken := &stubTx{rollbackErr: errors.New("connection reset")}
-	failed := db.PreserveRollbackError(ctx, broken, opErr, "register")
+	failed := pg.PreserveRollbackError(ctx, broken, opErr, "register")
 	fmt.Println(errors.Is(failed, opErr), isCleanupFailure(failed))
 
 	// Output:
@@ -97,7 +97,7 @@ func isCleanupFailure(err error) bool {
 // PoolConfig exists separately from NewPool so the configuration translation
 // is inspectable, and testable, without a database.
 func ExamplePoolConfig() {
-	cfg, err := db.PoolConfig(db.Config{
+	cfg, err := pg.PoolConfig(pg.Config{
 		DSN:              "postgres://user:pw@localhost:5432/appdb",
 		ApplicationName:  "ftc-api",
 		StatementTimeout: 30 * time.Second,

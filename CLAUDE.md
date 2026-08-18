@@ -25,9 +25,10 @@ Its first consumer is the freelance-tax-copilot rebuild.
 | `respond/` | The HTTP boundary: `Kind`→status, RFC 9457 problem details, log-once, `classify`. |
 | `httpmw/` | Only the middlewares that must know about the boundary: `Recoverer`, `AccessLog`, `SecurityHeaders`. |
 | `httpin/` | Strict JSON decoding, validation, path params. |
-| `db/` | pgx pool construction and transaction helpers. |
+| `pg/` | pgx pool construction and transaction helpers. |
 | `obs/` | slog + OpenTelemetry bootstrap. No middleware, no logger wrapper. |
 | `examples/` | **A separate module.** A complete service wiring all six packages, plus `main_test.go`, which drives the whole stack end to end in memory and asserts the exact wire output — including that traces and metrics actually emit. |
+| `pgtest/` | **A separate module.** `pg` against a real PostgreSQL, started by testcontainers. Holds only what a server can prove. |
 | `*/example_test.go` | Go `Example` functions — compiled *and run* by `go test`, with `// Output:` assertions. |
 | `README.md` | The composition root, the handler pattern, and a worked problem response. Read it first. |
 
@@ -41,9 +42,15 @@ of them exist to stop a plausible-looking "simplification" from reintroducing a 
 make check
 ```
 
-Which is `gofmt` + `go build` + `go vet` + `go test`, across **both modules**. Use it rather than
-running the commands by hand: `examples/` is a nested module, so a bare `go test ./...` from the
-root silently skips it and reports success. `make walkthrough` prints the end-to-end example output.
+Which is `gofmt` + `go build` + `go vet` + `go test`, across **all three modules**. Use it rather
+than running the commands by hand: `examples/` and `pgtest/` are nested modules, so a bare `go test
+./...` from the root silently skips both and reports success. `make walkthrough` prints the
+end-to-end example output.
+
+`make check` **needs a running Docker daemon**, because `pgtest` starts a throwaway PostgreSQL.
+`make check-short` is the opt-out and passes `-short`, which that module honours by skipping with a
+message rather than silently covering less than it appears to. Prefer fixing Docker over reaching
+for it.
 
 `examples/infra/local` runs the example against real infrastructure — Postgres plus Grafana,
 Tempo, Loki, Prometheus and Alloy — via `make docker-obs`, `make demo`, `make demo-requests`. It is
@@ -84,18 +91,33 @@ symbol it names. `examples/api` is where they are shown composed.
   `example_test.go` at all, and that is the rule working rather than an omission — a middleware
   needs a chain and observability needs a live app, so both can only be demonstrated composed.
 
-Two consequences to know before editing either. **`db` is compiled but never executed by
+Two consequences to know before editing either. **`pg` is compiled but never executed by
 `examples/api`** — `main_test.go` swaps in `memStore`, so `run()` and `pgStore` are typechecked and
-nothing more, which makes `db/example_test.go` the only place that package's behaviour is asserted.
+nothing more, which makes `pg/example_test.go` the only *example* asserting that package's
+behaviour; `pgtest/` asserts the rest against a real server.
 And a per-package example that merely re-demonstrates something `Example_endToEnd` already asserts
 byte-for-byte is duplication: delete it, leave a comment saying where the behaviour is now shown,
 and keep a named unit test pinning it. Three were removed this way — extension members and
 `TypeBaseURI` from `respond`, unknown-field rejection from `httpin`.
 
 Coverage is high on purpose — this is the code every service depends on, so a bug here is a bug
-everywhere. Do not let it fall without saying why. `db.NewPool` is the one known gap: it needs a
-real PostgreSQL and belongs in an integration test. `db.PoolConfig` exists specifically so the
-configuration translation is testable without one — keep that split.
+everywhere. Do not let it fall without saying why. `pg.PoolConfig` exists specifically so the
+configuration translation is testable without a server — keep that split.
+
+`pg` is the one package whose number is split across modules: `go test ./pg/...` reports what can be
+asserted without a server, and `make cover-pg` reports `pgtest`'s contribution. Merged they are
+96.7%, with `pg.NewPool` at 91.7%. The remaining `NewPool` branch is `pgxpool.NewWithConfig`
+returning an error, which is unreachable through `pg.Config` — puddle rejects only `MaxConns <= 0`,
+and `PoolConfig` assigns `MaxConns` solely when it is positive, leaving `ParseConfig`'s default
+otherwise. It is defensive code; leave it, and do not contort a test to reach it.
+
+**What belongs in `pgtest` is what a server can prove and a stub cannot.** Not coverage for its own
+sake — every test there fails if the behaviour it names is removed, which was checked by making the
+edit and watching it fail, not assumed. Three of them exist to hold an assumption about pgx to
+account: that a failed commit leaves a transaction pgx reports as `ErrTxClosed`, that `Beginner`
+taking a `pgx.Tx` really yields savepoint semantics, and that `PreserveRollbackError`'s
+`context.WithoutCancel` is what lets a rollback run at all once the request is gone. Against a stub
+those are restatements of the code; against PostgreSQL they are tests.
 
 ## Base branch
 
@@ -137,10 +159,20 @@ moving branch.
   transport's opinion. Do not move `StatusFor` onto the Kind type, and do not let `apperr` grow a
   `net/http` import.
 
+- **Storage packages are named for their engine, and never share an interface.** `pg` is called
+  that because every exported symbol takes or returns a pgx type and its timeouts are PostgreSQL's
+  own parameter names; it was renamed from `db`, which promised a generality it does not have. If a
+  second database is ever needed it is a sibling package — `mongo`, say — with its own vocabulary.
+  Do **not** introduce a `Store`, `DB` or `Repository` interface spanning them: Mongo has no
+  savepoints, so `Beginner` and `InTx` cannot mean there what they mean here, and the shared
+  interface would be the intersection of two engines, useful to neither. The same reasoning rules
+  out a `Cache` interface over in-memory and Redis — a map lookup cannot fail and a network call
+  can, and that difference is the one worth keeping.
+
 - **Classification fails closed.** An unrecognised error becomes a logged internal 500 with a
   generic detail. Never let a driver message reach a response body.
 
-- **Cleanup runs on a live context.** `db.PreserveRollbackError` uses `context.WithoutCancel` — the
+- **Cleanup runs on a live context.** `pg.PreserveRollbackError` uses `context.WithoutCancel` — the
   request context is usually already cancelled by the time cleanup runs, often because that
   cancellation caused the failure. Rolling back on it leaks the transaction.
 

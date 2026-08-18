@@ -1,6 +1,15 @@
-// Package db builds a configured pgx connection pool and provides the
+// Package pg builds a configured pgx connection pool and provides the
 // transaction helpers that make rollback failures visible rather than silent.
-package db
+//
+// It is named for PostgreSQL, not for databases in general, because that is
+// what it is: every exported symbol here either takes or returns a pgx type,
+// and StatementTimeout, LockTimeout and IdleInTransactionSessionTimeout are
+// PostgreSQL's own parameter names. A second database would be a sibling
+// package with its own vocabulary, not another implementation behind a shared
+// interface — Mongo has no savepoints, so Beginner and InTx could not mean the
+// same thing there, and an interface spanning both would be the intersection
+// of two databases, useful to neither.
+package pg
 
 import (
 	"context"
@@ -61,7 +70,7 @@ type Config struct {
 	// ecosystem ships. The field exists because without it there is no way to
 	// reach ConnConfig.Tracer through this constructor at all.
 	//
-	//	pool, err := db.NewPool(ctx, db.Config{
+	//	pool, err := pg.NewPool(ctx, pg.Config{
 	//	        DSN:         cfg.DatabaseURL,
 	//	        QueryTracer: otelpgx.NewTracer(),
 	//	})

@@ -12,8 +12,8 @@ import (
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
 	"go.opentelemetry.io/otel/trace"
 
-	"github.com/Donk3ys/kit/db"
 	"github.com/Donk3ys/kit/obs"
+	"github.com/Donk3ys/kit/pg"
 )
 
 // Storage failures the service classifies. These are plain sentinels, not
@@ -46,7 +46,7 @@ type pgStore struct {
 //
 // Two ways to get query spans, and this is the manual one — useful when you
 // want a span per *unit of work* with attributes you choose. For blanket
-// coverage of every query, set db.Config.QueryTracer to otelpgx.NewTracer()
+// coverage of every query, set pg.Config.QueryTracer to otelpgx.NewTracer()
 // instead and delete code like this; do not write your own pgx.QueryTracer.
 //
 // The attribute names follow OTel database semantic conventions, which is what
@@ -89,14 +89,14 @@ func (s *pgStore) ByID(ctx context.Context, id uuid.UUID) (w Widget, err error) 
 	return w, err
 }
 
-// Create shows db.InTx: the uniqueness check and the insert have to see the
+// Create shows pg.InTx: the uniqueness check and the insert have to see the
 // same snapshot, so they belong in one transaction. Returning a non-nil error
 // from the function rolls it back.
 func (s *pgStore) Create(ctx context.Context, w Widget) (err error) {
 	ctx, span := querySpan(ctx, "INSERT", "widgets")
 	defer func() { endQuerySpan(span, err) }()
 
-	err = db.InTx(ctx, s.pool, "create_widget", func(tx pgx.Tx) error {
+	err = pg.InTx(ctx, s.pool, "create_widget", func(tx pgx.Tx) error {
 		var exists bool
 		if err := tx.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM widgets WHERE name = $1)`, w.Name,

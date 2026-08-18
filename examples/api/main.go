@@ -40,10 +40,10 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/Donk3ys/kit/apperr"
-	"github.com/Donk3ys/kit/db"
 	"github.com/Donk3ys/kit/httpin"
 	"github.com/Donk3ys/kit/httpmw"
 	"github.com/Donk3ys/kit/obs"
+	"github.com/Donk3ys/kit/pg"
 	"github.com/Donk3ys/kit/respond"
 )
 
@@ -106,7 +106,7 @@ func run() error {
 		}
 	}()
 
-	pool, err := db.NewPool(ctx, db.Config{
+	pool, err := pg.NewPool(ctx, pg.Config{
 		DSN:                             databaseURL,
 		ApplicationName:                 serviceName,
 		MaxConns:                        25,

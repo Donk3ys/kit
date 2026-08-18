@@ -8,7 +8,7 @@ apperr/    classified errors — no net/http, no router, no driver
 respond/   the HTTP boundary: RFC 9457 problem details, log-once, classify
 httpmw/    the three middlewares that must know about the boundary
 httpin/    strict JSON decoding and validation
-db/        pgx pool construction and transaction helpers
+pg/        pgx pool construction and transaction helpers
 obs/       slog + OpenTelemetry bootstrap
 ```
 
@@ -39,18 +39,24 @@ the way a README snippet can:
 | `apperr/example_test.go` | Constructing and classifying errors; copy-on-write builders. |
 | `respond/example_test.go` | The handler pattern, and the exact problem body a client receives. |
 | `httpin/example_test.go` | Decoding, per-field validation failures, content-type enforcement. |
-| `db/example_test.go` | Pool construction, `InTx`, nested transactions, rollback semantics. |
+| `pg/example_test.go` | Pool construction, `InTx`, nested transactions, rollback semantics. |
+| `pgtest/` | `pg` against a **real PostgreSQL**, started by testcontainers: that the server accepts the timeouts kit sets and reads them as intended, that `NewPool`'s ping turns an unreachable database into a startup failure, and that pgx really behaves as the unit tests assume. |
 | `examples/infra/local/` | Docker Compose: Postgres and a full LGTM stack, so the service can be run for real and its telemetry actually looked at. |
 
 ```bash
 make walkthrough              # watch the whole stack respond
-make check                    # both modules: fmt, build, vet, test
+make check                    # all three modules: fmt, build, vet, test
+make check-short              # the same, without the Docker-backed database tests
 go doc ./respond              # read the examples alongside the API
 ```
 
-`examples/` is a **separate module**, so a bare `go test ./...` from the root skips it — use
-`make check`. It is separate because it depends on `otelhttp` and kit must not: kit deliberately
-does not provide that middleware, and its `require` block should say only what the library needs.
+`examples/` and `pgtest/` are **separate modules**, so a bare `go test ./...` from the root skips
+both — use `make check`. They are separate for the same reason: `examples/` depends on `otelhttp`
+and `pgtest/` on testcontainers, and kit must depend on neither. Its `require` block should say only
+what the library needs, and a test-only dependency in there is indistinguishable from a real one.
+
+`make check` therefore needs a Docker daemon. `make check-short` opts out, and `pgtest` says so
+rather than skipping quietly.
 
 **Start with `examples/api`.** It is the front door: one service wiring all six packages, and the
 only place middleware ordering, the boundary and observability are shown working together.
@@ -67,7 +73,7 @@ live app.
 ### Running it for real
 
 `main_test.go` proves the wire output but swaps the database for an in-memory
-store, so `db` is only ever typechecked there. `examples/infra/local` runs the
+store, so `pg` is only ever typechecked there. `examples/infra/local` runs the
 real thing — Postgres, plus Grafana with Tempo, Loki, Prometheus and Alloy:
 
 ```bash
@@ -122,7 +128,7 @@ func main() {
 	must(err)
 	defer obs.CombineShutdown(shutdownTraces, shutdownMetrics)(ctx)
 
-	pool, err := db.NewPool(ctx, db.Config{
+	pool, err := pg.NewPool(ctx, pg.Config{
 		DSN:                             cfg.DatabaseURL,
 		ApplicationName:                 "ftc-api",
 		MaxConns:                        25,
@@ -261,9 +267,16 @@ app's own `pkg/` first and get promoted only once a second consumer wants them.
 ## Verification
 
 ```bash
-go build ./... && go vet ./... && gofmt -l . && go test ./... -cover
+make check        # all three modules; needs a Docker daemon for pgtest
+make check-short  # the same, skipping the Docker-backed tests
+make cover-pg     # pg coverage contributed by pgtest
 ```
 
-`db.NewPool` is the one function without unit coverage — it needs a real
-PostgreSQL, so it belongs in an integration test. `db.PoolConfig` exists
-specifically so the configuration translation is testable without one.
+Do not run the bare `go` commands: `examples/` and `pgtest/` are nested modules,
+so `go test ./...` from the root skips both and reports success.
+
+`pg` is the one package whose coverage is split across modules — `go test
+./pg/...` for what needs no server, `make cover-pg` for the rest. Merged they
+are 96.7%, with `pg.NewPool` at 91.7%. `pg.PoolConfig` exists specifically so
+the configuration translation stays testable without a database; keep that
+split.

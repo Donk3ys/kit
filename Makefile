@@ -1,4 +1,4 @@
-.PHONY: check build vet fmt test cover examples tidy walkthrough \
+.PHONY: check check-short build vet fmt test cover cover-pg examples pgtest tidy walkthrough \
         docker-up docker-obs docker-down docker-reset demo demo-requests
 
 # --- Local stack for examples/api (see examples/infra/local) ----------------
@@ -28,9 +28,16 @@ API_ADDR ?= http://localhost:$(API_PORT)
 # and drift apart silently the first time one of them is edited.
 export POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB POSTGRES_PORT KIT_LOG_DIR
 
-# examples/ is a nested module, so `go test ./...` from here silently skips it.
-# Use `make check` rather than remembering that.
-check: fmt build vet test examples
+# examples/ and pgtest/ are nested modules, so `go test ./...` from here
+# silently skips both. Use `make check` rather than remembering that.
+#
+# This needs a running Docker daemon, because pgtest starts a PostgreSQL.
+# `make check-short` is the opt-out, and says so rather than quietly covering
+# less than it appears to.
+check: fmt build vet test examples pgtest
+
+check-short: fmt build vet test examples
+	go -C pgtest test ./... -count=1 -short
 
 build:
 	go build ./...
@@ -57,6 +64,19 @@ examples:
 	go -C examples vet ./...
 	go -C examples test ./... -count=1
 
+# pg.NewPool needs a real PostgreSQL, so its tests live in a third module for
+# the same reason examples/ is a second one: testcontainers pulls in the Docker
+# client and some fifty more modules, and in kit's own require block that would
+# read as something the library needs. Starts a throwaway container per run.
+pgtest:
+	go -C pgtest vet ./...
+	go -C pgtest test ./... -count=1
+
+# Coverage for pg.NewPool, which the root `make cover` cannot see: the tests
+# reaching it are in another module, so the package under test must be named.
+cover-pg:
+	go -C pgtest test ./... -count=1 -coverpkg=github.com/Donk3ys/kit/pg -cover
+
 # Run the end-to-end walkthrough and print what a client actually sees.
 walkthrough:
 	KIT_EXAMPLE_LOGS=1 go -C examples test ./api -run Example -v
@@ -64,6 +84,7 @@ walkthrough:
 tidy:
 	go mod tidy
 	go -C examples mod tidy
+	go -C pgtest mod tidy
 
 # Database only. Enough to run the example; nothing to look at yet.
 docker-up: $(KIT_LOG_DIR)

@@ -82,8 +82,14 @@ func PreserveRollbackError(
 	return operationErr
 }
 
+// errAbandonedTx is the operation error InTx hands PreserveRollbackError when
+// it unwinds without committing or rolling back, which in practice means fn
+// panicked. It never escapes InTx.
+var errAbandonedTx = errors.New("transaction abandoned without commit or rollback")
+
 // InTx runs fn inside a transaction, committing when it returns nil and
-// rolling back otherwise.
+// rolling back otherwise. A panic in fn rolls back before the panic continues
+// to unwind.
 //
 // fn must not commit or roll back the transaction itself, and must not retain
 // the pgx.Tx after returning.
@@ -93,6 +99,28 @@ func InTx(ctx context.Context, b Beginner, scope string, fn func(pgx.Tx) error) 
 		return apperr.NewExternal("DATABASE_UNAVAILABLE",
 			"The service is temporarily unavailable.", "postgres", err)
 	}
+
+	// Installed before fn runs, because a panic unwinding past here would
+	// otherwise reach neither the rollback below nor the commit. That leaks
+	// more than memory: pgxpool hands a transaction's connection back to the
+	// pool only from Commit or Rollback, and nothing reaps one that is still
+	// checked out, so the connection and the locks the transaction holds are
+	// gone for the life of the process. httpmw.Recoverer keeps that process
+	// alive to do it again, so MaxConns panics stop being an error rate and
+	// start being a permanent hang in Acquire.
+	//
+	// Unconditional, with no "already finished" flag, because pgx makes a
+	// second Rollback free: both dbTx and the savepoint form return
+	// ErrTxClosed from a local field check without a round trip, and
+	// PreserveRollbackError already treats that as nothing left to roll back.
+	// A flag on three return paths is the version that rots.
+	//
+	// The rollback error is discarded rather than logged: a panic outranks it,
+	// nothing below respond.Boundary logs, and a panicking function has no
+	// return value left to carry it.
+	defer func() {
+		_ = PreserveRollbackError(ctx, tx, errAbandonedTx, scope)
+	}()
 
 	if err := fn(tx); err != nil {
 		return PreserveRollbackError(ctx, tx, err, scope)

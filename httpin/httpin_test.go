@@ -120,6 +120,19 @@ func TestMalformedAndEmptyBodies(t *testing.T) {
 		{"not an object", `[1,2,3]`, apperr.KindUnprocessable, "VALIDATION_ERROR"},
 		{"trailing object", `{"email":"a@b.com","taxYear":2026}{"x":1}`,
 			apperr.KindValidation, "MALFORMED_JSON"},
+		// Regression: the check used to be dec.More(), which reports false for
+		// a trailing "]" or "}" because it is asking about elements of a
+		// container, not about end of input. These three bodies were accepted.
+		{"trailing bracket", `{"email":"a@b.com","taxYear":2026}]`,
+			apperr.KindValidation, "MALFORMED_JSON"},
+		{"trailing brace", `{"email":"a@b.com","taxYear":2026}}`,
+			apperr.KindValidation, "MALFORMED_JSON"},
+		{"trailing comma", `{"email":"a@b.com","taxYear":2026},`,
+			apperr.KindValidation, "MALFORMED_JSON"},
+		{"trailing garbage", `{"email":"a@b.com","taxYear":2026} nope`,
+			apperr.KindValidation, "MALFORMED_JSON"},
+		{"trailing scalar", `{"email":"a@b.com","taxYear":2026} null`,
+			apperr.KindValidation, "MALFORMED_JSON"},
 	}
 
 	for _, tt := range tests {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/Donk3ys/kit/apperr"
 	"github.com/Donk3ys/kit/pg"
@@ -47,6 +48,49 @@ func TestInTxCommitsAndRollsBackRealRows(t *testing.T) {
 			t.Errorf("row count went %d -> %d; the failed write was not rolled back", before, after)
 		}
 	})
+}
+
+// TestPanickingCallbackReturnsItsConnectionToThePool is the assertion a stub
+// cannot make. pg_test.go proves InTx calls Rollback when fn panics; only a
+// real pool proves that rollback is what hands the connection back, because
+// pgxpool releases a transaction's connection from Commit and Rollback and
+// nowhere else, and nothing reaps one that is still checked out.
+//
+// MaxConns is 1 so a leak is unambiguous: the follow-up query has no second
+// connection to fall back on. Its own short deadline is what turns the failure
+// into a message instead of a hung test binary.
+func TestPanickingCallbackReturnsItsConnectionToThePool(t *testing.T) {
+	pool := newPool(t, pg.Config{MaxConns: 1})
+	newTable(t, pool, "intx_panic", "id int PRIMARY KEY")
+
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("InTx swallowed the panic")
+			}
+		}()
+		_ = pg.InTx(t.Context(), pool, "panicking", func(tx pgx.Tx) error {
+			if _, err := tx.Exec(t.Context(), "INSERT INTO intx_panic (id) VALUES (1)"); err != nil {
+				t.Errorf("insert: %v", err)
+			}
+			panic("handler bug")
+		})
+	}()
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	var n int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM intx_panic").Scan(&n); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			t.Fatal("the pool is exhausted: the panicking transaction never " +
+				"returned its connection, and with MaxConns=1 nothing else can run")
+		}
+		t.Fatalf("counting rows: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("row count = %d, want 0 — the panicking transaction's write was committed", n)
+	}
 }
 
 // pg_test.go's TestClosedTransactionIsNotACleanupFailure stubs pgx.ErrTxClosed

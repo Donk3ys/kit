@@ -169,9 +169,18 @@ func NewPool(ctx context.Context, cfg Config) (*pgxpool.Pool, error) {
 
 // setMillis writes a PostgreSQL duration parameter, which is expressed in
 // milliseconds as a bare string.
+//
+// A positive duration under a millisecond is rounded up rather than truncated.
+// Milliseconds() would floor it to "0", which PostgreSQL reads as "no limit" —
+// so asking for a 500µs statement_timeout used to disable the timeout
+// altogether, which is the one answer the caller cannot have meant.
 func setMillis(params map[string]string, name string, d time.Duration) {
 	if d <= 0 {
 		return
 	}
-	params[name] = strconv.FormatInt(d.Milliseconds(), 10)
+	ms := d.Milliseconds()
+	if ms == 0 {
+		ms = 1
+	}
+	params[name] = strconv.FormatInt(ms, 10)
 }

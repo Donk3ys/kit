@@ -47,7 +47,12 @@ func AccessLog(logger *slog.Logger, skipPaths ...string) func(http.Handler) http
 					// headers and falls back to ?token= is the standard case —
 					// that logging them turns the access log into a secret store.
 					slog.String("path", r.URL.Path),
-					slog.Int("status", ww.Status()),
+					// Normalised, because chi reports 0 until something
+					// writes, while net/http sends 200 for a handler that
+					// writes nothing at all. Logging the raw value made a
+					// successful empty response look like a request that never
+					// got a reply.
+					slog.Int("status", loggedStatus(ww.Status())),
 					slog.Int("bytes", ww.BytesWritten()),
 					slog.Duration("duration", time.Since(start)),
 				}
@@ -66,4 +71,14 @@ func AccessLog(logger *slog.Logger, skipPaths ...string) func(http.Handler) http
 			next.ServeHTTP(ww, r)
 		})
 	}
+}
+
+// loggedStatus resolves a not-yet-written status to what the client actually
+// received. Only 0 is translated: any status the handler set is reported as-is,
+// including ones it set and then failed to write.
+func loggedStatus(status int) int {
+	if status == 0 {
+		return http.StatusOK
+	}
+	return status
 }

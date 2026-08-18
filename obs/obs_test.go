@@ -205,6 +205,39 @@ func TestInitTracingRequiresAServiceName(t *testing.T) {
 	}
 }
 
+// TestInitTracingRejectsASampleRatioOutsideZeroToOne is a regression test.
+// A negative ratio reached sampler's `ratio <= 0` branch, which exists for
+// "unset means record everything" — so SampleRatio: -1 sampled 100% of traces.
+// That is the most expensive reading of a value that asked for less, and the
+// opposite of the OTel SDK's own TraceIDRatioBased, which clamps a negative
+// fraction to zero.
+func TestInitTracingRejectsASampleRatioOutsideZeroToOne(t *testing.T) {
+	for _, ratio := range []float64{-1, -0.0001, 1.5, 2} {
+		// No Endpoint: the ratio is checked before the shortcut, so a bad
+		// value is reported on a developer machine with no collector rather
+		// than surviving until the deployment that has one.
+		shutdown, err := obs.InitTracing(context.Background(),
+			obs.TraceConfig{ServiceName: "kit-test", SampleRatio: ratio})
+		if !apperr.IsKind(err, apperr.KindInternal) {
+			t.Errorf("SampleRatio %v: error = %v, want an internal configuration error", ratio, err)
+		}
+		if shutdown == nil {
+			t.Errorf("SampleRatio %v: shutdown was nil on the error path; deferring it would panic", ratio)
+		}
+	}
+}
+
+// The bounds are inclusive, and zero in particular must stay legal: it is the
+// documented way to say "unset".
+func TestInitTracingAcceptsTheEndsOfTheSampleRatioRange(t *testing.T) {
+	for _, ratio := range []float64{0, 1} {
+		if _, err := obs.InitTracing(context.Background(),
+			obs.TraceConfig{ServiceName: "kit-test", SampleRatio: ratio}); err != nil {
+			t.Errorf("SampleRatio %v: InitTracing returned %v", ratio, err)
+		}
+	}
+}
+
 func TestInitTracingInstallsAProviderWhenConfigured(t *testing.T) {
 	ctx := context.Background()
 
@@ -230,6 +263,10 @@ func TestInitTracingInstallsAProviderWhenConfigured(t *testing.T) {
 
 // A child span must follow the decision its caller already made, or a sampled
 // trace loses every second hop to an independent coin flip.
+//
+// Out-of-range ratios are still exercised here even though InitTracing now
+// rejects them: sampler must stay total, so a future caller cannot reach a nil
+// sampler by skipping that gate.
 func TestSamplerIsAlwaysParentBased(t *testing.T) {
 	for _, ratio := range []float64{-1, 0, 0.5, 1, 2} {
 		desc := obs.Sampler(ratio).Description()

@@ -3,6 +3,7 @@ package obs
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -35,6 +36,12 @@ type TraceConfig struct {
 	// SampleRatio is the fraction of root traces recorded, from 0 to 1. Zero
 	// means the default of 1 (record everything), which is right in
 	// development and expensive in production.
+	//
+	// A value outside [0, 1] is a configuration error rather than something to
+	// interpret. Negative used to reach the same branch as zero and so turned a
+	// typo like -1 into full sampling — the most expensive possible reading of
+	// a value that plainly asked for less, and the opposite of what the OTel
+	// SDK does with it (TraceIDRatioBased clamps a negative fraction to zero).
 	SampleRatio float64
 }
 
@@ -48,6 +55,14 @@ func InitTracing(ctx context.Context, cfg TraceConfig) (ShutdownFunc, error) {
 		return noopShutdown, apperr.NewInternal("TRACING_CONFIG_INVALID",
 			"An unexpected error occurred.", "init_tracing",
 			errUnnamedService)
+	}
+	// Checked before the Endpoint shortcut, so a bad ratio is reported on the
+	// developer machine that has no collector rather than waiting for the
+	// deployment that does.
+	if cfg.SampleRatio < 0 || cfg.SampleRatio > 1 {
+		return noopShutdown, apperr.NewInternal("TRACING_CONFIG_INVALID",
+			"An unexpected error occurred.", "init_tracing",
+			fmt.Errorf("%w: %v", errSampleRatioRange, cfg.SampleRatio))
 	}
 	if cfg.Endpoint == "" {
 		return noopShutdown, nil
@@ -101,13 +116,18 @@ func Tracer(name string) trace.Tracer { return otel.Tracer(name) }
 // decision its caller already made, so a sampled trace stays whole instead of
 // losing every second hop to an independent coin flip.
 func sampler(ratio float64) sdktrace.Sampler {
-	// Zero means "unset", which defaults to recording everything; a ratio at
-	// or above 1 asks for the same thing. Both collapse to AlwaysSample rather
-	// than TraceIDRatioBased(1), which would do the same work by arithmetic.
+	// Zero means "unset", which defaults to recording everything; a ratio of 1
+	// asks for the same thing. Both collapse to AlwaysSample rather than
+	// TraceIDRatioBased(1), which would do the same work by arithmetic.
+	// InitTracing has already rejected anything outside [0, 1], so this is not
+	// quietly reinterpreting an out-of-range value as "everything".
 	if ratio <= 0 || ratio >= 1 {
 		return sdktrace.ParentBased(sdktrace.AlwaysSample())
 	}
 	return sdktrace.ParentBased(sdktrace.TraceIDRatioBased(ratio))
 }
 
-var errUnnamedService = errors.New("service name is required")
+var (
+	errUnnamedService   = errors.New("service name is required")
+	errSampleRatioRange = errors.New("sample ratio must be between 0 and 1")
+)

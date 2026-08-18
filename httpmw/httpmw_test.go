@@ -204,6 +204,43 @@ func TestAccessLogRecordsOneLinePerRequest(t *testing.T) {
 	}
 }
 
+// TestAccessLogReportsAnEmptySuccessAs200 is a regression test. The line used
+// to carry chi's raw status, which stays 0 until something writes — so a
+// handler that returned without writing was logged as status 0 while net/http
+// sent the client a 200. A dashboard counting non-2xx saw failures that never
+// happened.
+func TestAccessLogReportsAnEmptySuccessAs200(t *testing.T) {
+	logger, logs := newCapturingLogger()
+
+	h := httpmw.AccessLog(logger)(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ping", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("net/http sent %d; this test assumes an empty response is a 200", rec.Code)
+	}
+	if len(logs.records) != 1 {
+		t.Fatalf("got %d log records, want 1", len(logs.records))
+	}
+	if status, _ := attrValue(logs.records[0], "status"); status.Int64() != http.StatusOK {
+		t.Errorf("status = %d, want 200 — what the client actually received", status.Int64())
+	}
+}
+
+// The normalisation above must not reinterpret a status the handler chose.
+func TestAccessLogReportsAnExplicitStatusUnchanged(t *testing.T) {
+	logger, logs := newCapturingLogger()
+
+	h := httpmw.AccessLog(logger)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodDelete, "/widgets/1", nil))
+
+	if status, _ := attrValue(logs.records[0], "status"); status.Int64() != http.StatusNoContent {
+		t.Errorf("status = %d, want 204", status.Int64())
+	}
+}
+
 // A query string is a routine place for credentials — an EventSource that
 // cannot set headers and falls back to ?token= is the standard case.
 func TestAccessLogNeverRecordsTheQueryString(t *testing.T) {

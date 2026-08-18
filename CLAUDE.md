@@ -106,18 +106,20 @@ configuration translation is testable without a server — keep that split.
 
 `pg` is the one package whose number is split across modules: `go test ./pg/...` reports what can be
 asserted without a server, and `make cover-pg` reports `pgtest`'s contribution. Merged they are
-96.7%, with `pg.NewPool` at 91.7%. The remaining `NewPool` branch is `pgxpool.NewWithConfig`
+97.0%, with `pg.NewPool` at 91.7%. The remaining `NewPool` branch is `pgxpool.NewWithConfig`
 returning an error, which is unreachable through `pg.Config` — puddle rejects only `MaxConns <= 0`,
 and `PoolConfig` assigns `MaxConns` solely when it is positive, leaving `ParseConfig`'s default
 otherwise. It is defensive code; leave it, and do not contort a test to reach it.
 
 **What belongs in `pgtest` is what a server can prove and a stub cannot.** Not coverage for its own
 sake — every test there fails if the behaviour it names is removed, which was checked by making the
-edit and watching it fail, not assumed. Three of them exist to hold an assumption about pgx to
+edit and watching it fail, not assumed. Four of them exist to hold an assumption about pgx to
 account: that a failed commit leaves a transaction pgx reports as `ErrTxClosed`, that `Beginner`
-taking a `pgx.Tx` really yields savepoint semantics, and that `PreserveRollbackError`'s
-`context.WithoutCancel` is what lets a rollback run at all once the request is gone. Against a stub
-those are restatements of the code; against PostgreSQL they are tests.
+taking a `pgx.Tx` really yields savepoint semantics, that `PreserveRollbackError`'s
+`context.WithoutCancel` is what lets a rollback run at all once the request is gone, and that
+`Rollback` is the *only* thing that hands a panicking transaction's connection back — which is why
+that one runs against a `MaxConns: 1` pool, where a leak is a hang rather than a statistic. Against
+a stub those are restatements of the code; against PostgreSQL they are tests.
 
 ## Base branch
 

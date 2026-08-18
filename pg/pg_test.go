@@ -77,6 +77,26 @@ func TestPoolConfigWritesTimeoutsAsMilliseconds(t *testing.T) {
 	}
 }
 
+// TestPoolConfigRoundsSubMillisecondTimeoutsUp is a regression test. These
+// parameters are written in whole milliseconds, and truncating a positive
+// duration below one produced "0" — which PostgreSQL reads as "no limit", the
+// exact opposite of what a caller asking for 500µs wanted.
+func TestPoolConfigRoundsSubMillisecondTimeoutsUp(t *testing.T) {
+	cfg, err := pg.PoolConfig(pg.Config{
+		DSN:              testDSN,
+		StatementTimeout: 500 * time.Microsecond,
+		LockTimeout:      1 * time.Nanosecond,
+	})
+	if err != nil {
+		t.Fatalf("PoolConfig returned %v", err)
+	}
+	for _, k := range []string{"statement_timeout", "lock_timeout"} {
+		if got := cfg.ConnConfig.RuntimeParams[k]; got != "1" {
+			t.Errorf("RuntimeParams[%q] = %q, want \"1\"; %q disables the timeout", k, got, "0")
+		}
+	}
+}
+
 // Zero means "keep the server default" — this package must not invent a
 // statement timeout that could kill a legitimate long-running query.
 func TestPoolConfigLeavesUnsetTimeoutsAlone(t *testing.T) {
@@ -156,14 +176,33 @@ type stubTx struct {
 	rollbackErr error
 	committed   bool
 	rolledBack  bool
+	// closed mirrors pgx, where both dbTx and the savepoint form return
+	// ErrTxClosed from a local field check once the transaction is finished,
+	// without reaching the server, and set it even when Commit fails. InTx's
+	// cleanup defer runs on every path and relies on exactly that. A stub that
+	// did not model it would report a rollback the driver never sends, and
+	// "rolled back a successful transaction" would stop meaning anything.
+	closed bool
 	// rollbackCtxHadDeadline records whether cleanup ran on a live context,
 	// which is what proves the cancelled-request path works.
 	rollbackCtxErr error
 }
 
-func (s *stubTx) Commit(context.Context) error { s.committed = true; return s.commitErr }
+func (s *stubTx) Commit(context.Context) error {
+	if s.closed {
+		return pgx.ErrTxClosed
+	}
+	s.committed = true
+	s.closed = true
+	return s.commitErr
+}
+
 func (s *stubTx) Rollback(ctx context.Context) error {
+	if s.closed {
+		return pgx.ErrTxClosed
+	}
 	s.rolledBack = true
+	s.closed = true
 	s.rollbackCtxErr = ctx.Err()
 	return s.rollbackErr
 }
@@ -332,6 +371,63 @@ func TestInTxRollsBackOnFailure(t *testing.T) {
 	}
 	if !errors.Is(err, opErr) {
 		t.Errorf("returned %v, want the operation error unchanged", err)
+	}
+}
+
+// TestInTxRollsBackWhenTheCallbackPanics is a regression test. InTx used to
+// roll back only when fn returned an error, so a panic unwound past both the
+// rollback and the commit and abandoned the transaction: pgxpool returns a
+// connection to the pool only from Commit or Rollback, so the connection and
+// every lock the transaction held stayed out for the life of the process, and
+// httpmw.Recoverer kept that process alive to repeat it until Acquire hung.
+func TestInTxRollsBackWhenTheCallbackPanics(t *testing.T) {
+	tx := &stubTx{}
+	b := &stubBeginner{tx: tx}
+	boom := errors.New("handler bug")
+
+	func() {
+		defer func() {
+			// The panic must still reach the caller unchanged; swallowing it
+			// here would turn a bug into a silent success.
+			switch r := recover(); r {
+			case nil:
+				t.Error("InTx swallowed the panic")
+			case any(boom):
+			default:
+				t.Errorf("recovered %v, want the original panic value %v", r, boom)
+			}
+		}()
+		_ = pg.InTx(context.Background(), b, "scope", func(pgx.Tx) error { panic(boom) })
+	}()
+
+	if !tx.rolledBack {
+		t.Error("did not roll back the abandoned transaction")
+	}
+	if tx.committed {
+		t.Error("committed a transaction whose callback panicked")
+	}
+}
+
+// TestInTxCleanupSurvivesACancelledRequestOnThePanicPath pins the panic
+// rollback to the same live context the returned-error path uses. Sharing
+// PreserveRollbackError is what buys this, and it is the reason the cleanup
+// defer does not call tx.Rollback directly.
+func TestInTxCleanupSurvivesACancelledRequestOnThePanicPath(t *testing.T) {
+	tx := &stubTx{}
+	b := &stubBeginner{tx: tx}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	func() {
+		defer func() { _ = recover() }()
+		_ = pg.InTx(ctx, b, "scope", func(pgx.Tx) error { panic("boom") })
+	}()
+
+	if !tx.rolledBack {
+		t.Fatal("did not roll back")
+	}
+	if tx.rollbackCtxErr != nil {
+		t.Errorf("rollback ran on a dead context (%v); it must use WithoutCancel", tx.rollbackCtxErr)
 	}
 }
 

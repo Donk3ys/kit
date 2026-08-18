@@ -6,7 +6,9 @@ import (
 	"log/slog"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgerrcode"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel/codes"
 	semconv "go.opentelemetry.io/otel/semconv/v1.43.0"
@@ -89,9 +91,21 @@ func (s *pgStore) ByID(ctx context.Context, id uuid.UUID) (w Widget, err error) 
 	return w, err
 }
 
-// Create shows pg.InTx: the uniqueness check and the insert have to see the
-// same snapshot, so they belong in one transaction. Returning a non-nil error
-// from the function rolls it back.
+// Create shows pg.InTx: the uniqueness check and the insert belong in one
+// transaction. Returning a non-nil error from the function rolls it back.
+//
+// The SELECT is not what makes the name unique, and it would be a bug to read
+// it that way. Under READ COMMITTED two concurrent creates can both see "no
+// such name" and both proceed; the UNIQUE constraint in schema.sql is what
+// actually holds, and PostgreSQL says so explicitly — checking first does not
+// eliminate a later unique violation at any isolation level. So the constraint
+// violation is translated here too. Without that translation the loser of the
+// race got a 503 from the storage branch in main.go rather than the documented
+// 409, which is the same answer arriving under a different name.
+//
+// The SELECT stays because it is the cheap path and it produces errNameTaken
+// without burning a transaction id on a doomed insert; the 23505 branch is the
+// one that has to be right.
 func (s *pgStore) Create(ctx context.Context, w Widget) (err error) {
 	ctx, span := querySpan(ctx, "INSERT", "widgets")
 	defer func() { endQuerySpan(span, err) }()
@@ -110,6 +124,9 @@ func (s *pgStore) Create(ctx context.Context, w Widget) (err error) {
 		_, err := tx.Exec(ctx,
 			`INSERT INTO widgets (id, name, quantity) VALUES ($1, $2, $3)`,
 			w.ID, w.Name, w.Quantity)
+		if isUniqueViolation(err, "widgets_name_key") {
+			return errNameTaken
+		}
 		return err
 	})
 	if err != nil {
@@ -122,6 +139,22 @@ func (s *pgStore) Create(ctx context.Context, w Widget) (err error) {
 		slog.String("widget_id", w.ID.String()),
 	)
 	return nil
+}
+
+// isUniqueViolation reports whether err is PostgreSQL's unique_violation for a
+// named constraint. The name is checked rather than the SQLSTATE alone: a table
+// with two unique constraints would otherwise report every one of them as the
+// same conflict, and a client acting on that is being misled.
+//
+// This lives in the app, not in kit. respond cannot do it — 23505 means "some
+// uniqueness was violated", and only the code that wrote the constraint knows
+// which of its columns that is and whether the collision is expected control
+// flow or a bug.
+func isUniqueViolation(err error, constraint string) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) &&
+		pgErr.Code == pgerrcode.UniqueViolation &&
+		pgErr.ConstraintName == constraint
 }
 
 func (s *pgStore) Delete(ctx context.Context, id uuid.UUID) error {

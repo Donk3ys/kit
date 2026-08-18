@@ -78,7 +78,22 @@ func DecodeAndValidate[T any](w http.ResponseWriter, r *http.Request, maxBytes i
 	}
 
 	// {"a":1}{"b":2} must not quietly pass with only the first object applied.
-	if dec.More() {
+	//
+	// This decodes a second value rather than asking dec.More(), which was the
+	// earlier check and is the wrong tool: More is defined over the elements of
+	// the array or object being parsed, so it answers false for a trailing "]"
+	// or "}" exactly as it does for a clean end of input, and
+	// `{"taxYear":2026}]` was accepted. It also reports a read error as false,
+	// so maxBytes tripping while it scanned past the object read as end of
+	// input as well.
+	switch err := dec.Decode(new(json.RawMessage)); {
+	case errors.Is(err, io.EOF):
+		// Nothing follows the object, which is the only acceptable outcome.
+	case err != nil:
+		// Classified rather than lumped in below, so a body that overruns
+		// maxBytes only after a complete object is still a 413.
+		return zero, decodeError(err, maxBytes)
+	default:
 		return zero, apperr.NewValidation("MALFORMED_JSON",
 			"The request body must contain exactly one JSON object.", nil)
 	}

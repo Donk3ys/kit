@@ -27,10 +27,15 @@ import (
 type memStore struct {
 	byName map[string]uuid.UUID
 	byUUID map[uuid.UUID]Widget
+	logger *slog.Logger
 }
 
-func newMemStore() *memStore {
-	return &memStore{byName: map[string]uuid.UUID{}, byUUID: map[uuid.UUID]Widget{}}
+func newMemStore(logger *slog.Logger) *memStore {
+	return &memStore{
+		byName: map[string]uuid.UUID{},
+		byUUID: map[uuid.UUID]Widget{},
+		logger: logger,
+	}
 }
 
 func (m *memStore) ByID(_ context.Context, id uuid.UUID) (Widget, error) {
@@ -41,12 +46,15 @@ func (m *memStore) ByID(_ context.Context, id uuid.UUID) (Widget, error) {
 	return w, nil
 }
 
-func (m *memStore) Create(_ context.Context, w Widget) error {
+func (m *memStore) Create(ctx context.Context, w Widget) error {
 	if _, taken := m.byName[w.Name]; taken {
 		return errNameTaken
 	}
 	m.byName[w.Name] = w.ID
 	m.byUUID[w.ID] = w
+	m.logger.InfoContext(ctx, "widget persisted",
+		slog.String("widget_id", w.ID.String()),
+	)
 	return nil
 }
 
@@ -76,12 +84,6 @@ func newTestRouter() http.Handler {
 // store. Only storage is swapped — the middleware chain, boundary, handlers
 // and instrumentation are the same ones main() wires up.
 func newTestRouterWithMetrics(registry *prometheus.Registry) (http.Handler, *widgetService) {
-	svc, err := newWidgetService(newMemStore())
-	if err != nil {
-		panic(err)
-	}
-	svc.nextID = func() uuid.UUID { return uuid.MustParse(fixedID) }
-
 	// Example output is asserted from stdout, so opt-in logs use stderr: this
 	// keeps the wire walkthrough deterministic while making the production log
 	// path observable with KIT_EXAMPLE_LOGS=1 make walkthrough.
@@ -93,7 +95,19 @@ func newTestRouterWithMetrics(registry *prometheus.Registry) (http.Handler, *wid
 		Level:  slog.LevelInfo,
 		Format: "text",
 		Output: logOutput,
-	})
+	}).With(
+		slog.String("service.name", serviceName),
+		slog.String("deployment.environment.name", "test"),
+	)
+
+	store := newMemStore(logger.With(slog.String("component", "widget-store")))
+	svc, err := newWidgetService(store,
+		logger.With(slog.String("component", "widget-service")))
+	if err != nil {
+		panic(err)
+	}
+	svc.nextID = func() uuid.UUID { return uuid.MustParse(fixedID) }
+
 	return newRouter(logger, registry, svc), svc
 }
 

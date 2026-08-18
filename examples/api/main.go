@@ -67,7 +67,10 @@ func run() error {
 		environment  = envOr("ENVIRONMENT", "development")
 	)
 
-	logger := obs.NewLogger(obs.LogConfig{Level: slog.LevelInfo, Format: "json"})
+	logger := obs.NewLogger(obs.LogConfig{Level: slog.LevelInfo, Format: "json"}).With(
+		slog.String("service.name", serviceName),
+		slog.String("deployment.environment.name", environment),
+	)
 
 	shutdownTraces, err := obs.InitTracing(ctx, obs.TraceConfig{
 		ServiceName: serviceName,
@@ -112,7 +115,12 @@ func run() error {
 	}
 	defer pool.Close()
 
-	svc, err := newWidgetService(&pgStore{pool: pool})
+	store := &pgStore{
+		pool:   pool,
+		logger: logger.With(slog.String("component", "widget-store")),
+	}
+	svc, err := newWidgetService(store,
+		logger.With(slog.String("component", "widget-service")))
 	if err != nil {
 		return fmt.Errorf("instrumentation: %w", err)
 	}
@@ -248,10 +256,12 @@ func widgetRoutes(b *respond.Boundary, svc *widgetService) http.Handler {
 
 // --- service ---------------------------------------------------------------
 
-// widgetService turns storage outcomes into classified errors. It logs
-// nothing: the boundary writes the one log line per failed request.
+// widgetService turns storage outcomes into classified errors. It leaves
+// failures for the boundary to log once, but may log app-specific successful
+// outcomes such as a completed create.
 type widgetService struct {
 	store  widgetStore
+	logger *slog.Logger
 	nextID func() uuid.UUID // injectable so the end-to-end example is deterministic
 
 	tracer   trace.Tracer
@@ -262,7 +272,7 @@ type widgetService struct {
 // newWidgetService wires app-level instrumentation. Both accessors are safe to
 // call before InitTracing/InitMetrics run — they fall back to no-op providers —
 // so this works identically with observability switched off.
-func newWidgetService(store widgetStore) (*widgetService, error) {
+func newWidgetService(store widgetStore, logger *slog.Logger) (*widgetService, error) {
 	meter := obs.Meter("kit/examples/api")
 
 	created, err := meter.Int64Counter("widgets.created",
@@ -278,6 +288,7 @@ func newWidgetService(store widgetStore) (*widgetService, error) {
 
 	return &widgetService{
 		store:    store,
+		logger:   logger,
 		tracer:   obs.Tracer("kit/examples/api"),
 		created:  created,
 		rejected: rejected,
@@ -325,6 +336,10 @@ func (s *widgetService) create(ctx context.Context, in CreateWidget) (*Widget, e
 
 	s.created.Add(ctx, 1)
 	span.SetAttributes(attribute.String("widget.id", widget.ID.String()))
+	s.logger.InfoContext(ctx, "widget created",
+		slog.String("widget_id", widget.ID.String()),
+		slog.Int("quantity", widget.Quantity),
+	)
 	return &widget, nil
 }
 

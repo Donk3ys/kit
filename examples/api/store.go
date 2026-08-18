@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -36,7 +37,10 @@ type widgetStore interface {
 }
 
 // pgStore is the production implementation.
-type pgStore struct{ pool *pgxpool.Pool }
+type pgStore struct {
+	pool   *pgxpool.Pool
+	logger *slog.Logger
+}
 
 // querySpan opens a span around one database call.
 //
@@ -92,7 +96,7 @@ func (s *pgStore) Create(ctx context.Context, w Widget) (err error) {
 	ctx, span := querySpan(ctx, "INSERT", "widgets")
 	defer func() { endQuerySpan(span, err) }()
 
-	return db.InTx(ctx, s.pool, "create_widget", func(tx pgx.Tx) error {
+	err = db.InTx(ctx, s.pool, "create_widget", func(tx pgx.Tx) error {
 		var exists bool
 		if err := tx.QueryRow(ctx,
 			`SELECT EXISTS (SELECT 1 FROM widgets WHERE name = $1)`, w.Name,
@@ -108,6 +112,16 @@ func (s *pgStore) Create(ctx context.Context, w Widget) (err error) {
 			w.ID, w.Name, w.Quantity)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+
+	// This is a component-specific success log. Failures are returned to the
+	// service and ultimately logged once by the HTTP boundary.
+	s.logger.InfoContext(ctx, "widget persisted",
+		slog.String("widget_id", w.ID.String()),
+	)
+	return nil
 }
 
 func (s *pgStore) Delete(ctx context.Context, id uuid.UUID) error {

@@ -123,9 +123,8 @@ a stub those are restatements of the code; against PostgreSQL they are tests.
 
 ## Base branch
 
-`main`. There is no remote yet, and no released tag — cutting `v0.1.0` before the FTC rebuild
-imports this module is outstanding, so the first consumer pins a version rather than tracking a
-moving branch.
+`main`, published at `github.com/Donk3ys/kit`. Consumers pin a tagged release rather than tracking
+a moving branch, so a change a consumer needs ships as a new tag. `v0.1.0` is the first.
 
 ## Core architectural principles
 

@@ -22,7 +22,7 @@ func ExampleNewPool() {
 
 	pool, err := pg.NewPool(ctx, pg.Config{
 		DSN:             "postgres://user:pw@localhost:5432/appdb",
-		ApplicationName: "ftc-api",
+		ApplicationName: "shop-api",
 		MaxConns:        25,
 		// Strongly recommended, and deliberately not defaulted: the right
 		// value is a product decision, and a guess would silently kill a
@@ -99,7 +99,7 @@ func isCleanupFailure(err error) bool {
 func ExamplePoolConfig() {
 	cfg, err := pg.PoolConfig(pg.Config{
 		DSN:              "postgres://user:pw@localhost:5432/appdb",
-		ApplicationName:  "ftc-api",
+		ApplicationName:  "shop-api",
 		StatementTimeout: 30 * time.Second,
 	})
 	if err != nil {
@@ -114,5 +114,5 @@ func ExamplePoolConfig() {
 	// Output:
 	// 5s
 	// 30000
-	// ftc-api
+	// shop-api
 }

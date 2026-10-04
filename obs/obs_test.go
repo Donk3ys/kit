@@ -350,7 +350,7 @@ func TestInitMetricsNamespacePrefixesInstruments(t *testing.T) {
 
 	registry, shutdown, err := obs.InitMetrics(obs.MetricConfig{
 		ServiceName: "kit-test",
-		Namespace:   "ftc",
+		Namespace:   "shop",
 	})
 	if err != nil {
 		t.Fatalf("InitMetrics returned %v", err)
@@ -367,8 +367,8 @@ func TestInitMetricsNamespacePrefixesInstruments(t *testing.T) {
 	obs.MetricsHandler(registry).ServeHTTP(w,
 		httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
-	if !strings.Contains(w.Body.String(), "ftc_gadgets_made") {
-		t.Errorf("namespace was not applied; body did not contain ftc_gadgets_made")
+	if !strings.Contains(w.Body.String(), "shop_gadgets_made") {
+		t.Errorf("namespace was not applied; body did not contain shop_gadgets_made")
 	}
 }
 

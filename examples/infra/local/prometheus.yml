@@ -12,9 +12,9 @@ scrape_configs:
   # go the other way, pushed over OTLP to lgtm. Metrics pull, traces push --
   # that split is the thing to notice here.
   #
-  # 8081 rather than the service's own :8080 default, because
-  # freelance-tax-copilot's API holds 8080 on this machine. It must agree with
-  # API_PORT in the root Makefile.
+  # 8081 rather than the service's own :8080 default, because another local
+  # service is likely to hold 8080. It must agree with API_PORT in the root
+  # Makefile.
   - job_name: kit-example-api
     static_configs:
       - targets: ["host.docker.internal:8081"]

@@ -20,7 +20,7 @@ type MetricConfig struct {
 	ServiceName    string
 	ServiceVersion string
 	Environment    string
-	// Namespace prefixes every metric name, e.g. "ftc". Optional, and best
+	// Namespace prefixes every metric name, e.g. "shop". Optional, and best
 	// left empty unless one Prometheus scrapes several services whose metric
 	// names would otherwise collide.
 	Namespace string

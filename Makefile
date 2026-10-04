@@ -17,8 +17,9 @@ OTLP_ENDPOINT ?= localhost:4317
 KIT_LOG_DIR   ?= /tmp/kit-logs
 
 # 8081, not the service's own :8080 default, for the same reason Postgres is on
-# 5433: freelance-tax-copilot's API holds 8080. Changing this means changing the
-# scrape target in examples/infra/local/prometheus.yml to match.
+# 5433: the demo runs beside other local services that already hold the usual
+# defaults. Changing this means changing the scrape target in
+# examples/infra/local/prometheus.yml to match.
 API_PORT ?= 8081
 API_ADDR ?= http://localhost:$(API_PORT)
 

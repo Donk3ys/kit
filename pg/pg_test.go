@@ -55,7 +55,7 @@ func TestPoolConfigDefaultsAndOverrides(t *testing.T) {
 func TestPoolConfigWritesTimeoutsAsMilliseconds(t *testing.T) {
 	cfg, err := pg.PoolConfig(pg.Config{
 		DSN:                             testDSN,
-		ApplicationName:                 "ftc-api",
+		ApplicationName:                 "shop-api",
 		StatementTimeout:                30 * time.Second,
 		LockTimeout:                     5 * time.Second,
 		IdleInTransactionSessionTimeout: 15 * time.Second,
@@ -65,7 +65,7 @@ func TestPoolConfigWritesTimeoutsAsMilliseconds(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"application_name":                    "ftc-api",
+		"application_name":                    "shop-api",
 		"statement_timeout":                   "30000",
 		"lock_timeout":                        "5000",
 		"idle_in_transaction_session_timeout": "15000",

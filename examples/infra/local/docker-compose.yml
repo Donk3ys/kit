@@ -1,8 +1,8 @@
-# Local stack for examples/api, adapted from nodeb8's infra/local.
+# Local stack for examples/api.
 #
-# Trimmed to what kit actually needs. nodeb8 also runs valkey, nats and
-# smtp4dev; kit deliberately provides no cache, event bus or email, so shipping
-# them here would advertise a scope the library does not have.
+# Trimmed to what kit actually needs: no valkey, nats or smtp4dev. kit
+# deliberately provides no cache, event bus or email, so shipping them here
+# would advertise a scope the library does not have.
 #
 # The API runs on the host via `make demo`, not in a container, so the loop
 # stays a Go build instead of an image build. Two consequences show up below:
@@ -29,8 +29,8 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-secret}
       POSTGRES_DB: ${POSTGRES_DB:-kitdemo}
     ports:
-      # 5433, not 5432: freelance-tax-copilot -- kit's first consumer, and so
-      # the stack most likely to be up at the same time -- holds 5432.
+      # 5433, not 5432: a service that uses kit is the stack most likely to be
+      # up at the same time, and it holds 5432.
       - "${POSTGRES_PORT:-5433}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data

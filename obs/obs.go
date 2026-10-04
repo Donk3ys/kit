@@ -18,9 +18,9 @@
 //	logger := obs.NewLogger(obs.LogConfig{Level: slog.LevelInfo, Format: "json"})
 //
 //	shutdownTraces, err := obs.InitTracing(ctx, obs.TraceConfig{
-//	        ServiceName: "ftc-api", Endpoint: cfg.OTLPEndpoint, SampleRatio: 0.1,
+//	        ServiceName: "shop-api", Endpoint: cfg.OTLPEndpoint, SampleRatio: 0.1,
 //	})
-//	registry, shutdownMetrics, err := obs.InitMetrics(obs.MetricConfig{ServiceName: "ftc-api"})
+//	registry, shutdownMetrics, err := obs.InitMetrics(obs.MetricConfig{ServiceName: "shop-api"})
 //	defer obs.CombineShutdown(shutdownTraces, shutdownMetrics)(ctx)
 //
 //	handler := otelhttp.NewHandler(router, "api")

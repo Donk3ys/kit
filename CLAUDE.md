@@ -7,15 +7,13 @@ repository. It is this repository's declaration under "The host repository contr
 ## What this is
 
 `github.com/Donk3ys/kit` — shared Go plumbing for Postgres + chi HTTP services. It was **extracted
-from two working codebases** (`freelance-tax-copilot`, and the archived `nodeb8`) rather than
-designed up front, and every line in it ran in production or dogfooding before it landed here.
+from two working codebases** rather than designed up front, and every line in it ran in production
+or dogfooding before it landed here.
 
 It is a **library, not a framework**. It never owns `main`, the router, or the dependency graph.
 The app composes; kit hands it pieces. If a change here starts owning startup — an `App` type, a
 `Run` function, a registry handlers plug into — that is the failure mode this repository exists to
 avoid, not a refactor.
-
-Its first consumer is the freelance-tax-copilot rebuild.
 
 ## Repository map
 
@@ -54,7 +52,7 @@ for it.
 
 `examples/infra/local` runs the example against real infrastructure — Postgres plus Grafana,
 Tempo, Loki, Prometheus and Alloy — via `make docker-obs`, `make demo`, `make demo-requests`. It is
-adapted from `nodeb8/infra/local` rather than invented, and trimmed: no valkey, nats or smtp4dev,
+adapted from a working local stack rather than invented, and trimmed: no valkey, nats or smtp4dev,
 because kit provides no cache, event bus or email and the stack should not imply otherwise. Two
 things there are load-bearing and easy to break. `grafana-datasources.yaml` must keep the filename
 the `grafana/otel-lgtm` image uses, or it lands beside the image's own file and collides on

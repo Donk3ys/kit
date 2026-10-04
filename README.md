@@ -99,8 +99,9 @@ Prometheus exporter, `obs.InitTracing` an OTLP client. That is why the stack has
 a Prometheus alongside the all-in-one image, and why the service runs on the
 host but is still reachable at `host.docker.internal`.
 
-Ports avoid freelance-tax-copilot's (Postgres on 5433, the API on 8081); see
-`examples/infra/local/.env.example` to change them. `make docker-reset` drops
+Ports are off the usual defaults (Postgres on 5433, the API on 8081) so the demo
+runs beside other local services; see `examples/infra/local/.env.example` to
+change them. `make docker-reset` drops
 the volumes, which is required after editing `schema.sql` because Postgres runs
 `initdb` scripts only against an empty data directory.
 
@@ -114,7 +115,7 @@ func main() {
 	logger := obs.NewLogger(obs.LogConfig{Level: cfg.LogLevel, Format: "json"})
 
 	shutdownTraces, err := obs.InitTracing(ctx, obs.TraceConfig{
-		ServiceName: "ftc-api",
+		ServiceName: "shop-api",
 		Environment: cfg.Environment,
 		Endpoint:    cfg.OTLPEndpoint, // empty disables tracing entirely
 		SampleRatio: cfg.TraceSampleRatio,
@@ -122,7 +123,7 @@ func main() {
 	must(err)
 
 	registry, shutdownMetrics, err := obs.InitMetrics(obs.MetricConfig{
-		ServiceName: "ftc-api",
+		ServiceName: "shop-api",
 		Environment: cfg.Environment,
 	})
 	must(err)
@@ -130,7 +131,7 @@ func main() {
 
 	pool, err := pg.NewPool(ctx, pg.Config{
 		DSN:                             cfg.DatabaseURL,
-		ApplicationName:                 "ftc-api",
+		ApplicationName:                 "shop-api",
 		MaxConns:                        25,
 		StatementTimeout:                30 * time.Second,
 		LockTimeout:                     5 * time.Second,
